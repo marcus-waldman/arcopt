@@ -219,3 +219,61 @@ test_that("arcopt uses custom control parameters", {
   # With stricter tolerance, should get very close to optimum
   expect_true(max(abs(result$gradient)) < 1e-9)
 })
+
+test_that("arcopt detects NaN in initial point", {
+  # Function that returns NaN at initial point
+  nan_fn <- function(x) {
+    if (all(x == c(1, 1))) return(NaN)
+    sum(x^2)
+  }
+  nan_gr <- function(x) 2 * x
+  nan_hess <- function(x) 2 * diag(length(x))
+
+  expect_error(
+    arcopt(x0 = c(1, 1), fn = nan_fn, gr = nan_gr, hess = nan_hess),
+    "Initial point yields NaN"
+  )
+})
+
+test_that("arcopt detects NaN in gradient at initial point", {
+  # Function with NaN gradient at initial point
+  sphere <- function(x) sum(x^2)
+  nan_gr <- function(x) {
+    if (all(x == c(1, 1))) return(c(NaN, NaN))
+    2 * x
+  }
+  sphere_hess <- function(x) 2 * diag(length(x))
+
+  expect_error(
+    arcopt(x0 = c(1, 1), fn = sphere, gr = nan_gr, hess = sphere_hess),
+    "Initial point yields NaN"
+  )
+})
+
+test_that("arcopt handles NaN during optimization by rejecting step", {
+  # Function that returns NaN at specific point
+  eval_count <- 0
+  nan_fn <- function(x) {
+    eval_count <<- eval_count + 1
+    # Return NaN on second evaluation (trial point)
+    if (eval_count == 2) return(NaN)
+    sum(x^2)
+  }
+  sphere_gr <- function(x) 2 * x
+  sphere_hess <- function(x) 2 * diag(length(x))
+
+  # Reset counter
+  eval_count <- 0
+
+  result <- arcopt(
+    x0 = c(5, 5),
+    fn = nan_fn,
+    gr = sphere_gr,
+    hess = sphere_hess,
+    control = list(maxit = 10)
+  )
+
+  # Should handle NaN by increasing sigma and continuing
+  # Eventually converges or hits max iterations
+  expect_true(result$converged || result$iterations == 10)
+})

@@ -138,11 +138,21 @@ arcopt <- function(x0, fn, gr, hess = NULL,
   gr_evals <- 0
   hess_evals <- 0
 
+  # Safeguards: Track history for stagnation detection
+  step_norms <- numeric(0)
+  f_values <- numeric(0)
+  already_refreshed <- FALSE
+
   # Initial evaluation
   f_current <- fn(x_current)
   g_current <- gr(x_current)
   fn_evals <- fn_evals + 1
   gr_evals <- gr_evals + 1
+
+  # Check for NaN/Inf at initial point
+  if (!check_finite(f_current, g_current)) {
+    stop("Initial point yields NaN or Inf in function or gradient")
+  }
 
   if (!is.null(hess)) {
     h_current <- hess(x_current)
@@ -150,6 +160,9 @@ arcopt <- function(x0, fn, gr, hess = NULL,
   } else {
     stop("hess function is required for this implementation")
   }
+
+  # Initialize history with initial values
+  f_values <- c(f_values, f_current)
 
   # Store previous values for convergence checking
   f_previous <- NA
@@ -182,6 +195,25 @@ arcopt <- function(x0, fn, gr, hess = NULL,
       break
     }
 
+    # STEP 1b: Check for stagnation
+    stagnation_result <- detect_stagnation(
+      step_norms = step_norms,
+      f_values = f_values,
+      max_stagnant = 5,
+      is_qn = FALSE,  # Currently no QN support
+      already_refreshed = already_refreshed
+    )
+
+    if (stagnation_result == "stop") {
+      converged <- TRUE
+      conv_reason <- "stagnation"
+      break
+    } else if (stagnation_result == "refresh_hessian") {
+      # For quasi-Newton: would refresh Hessian here
+      # Currently not implemented
+      already_refreshed <- TRUE
+    }
+
     # STEP 2: Try Newton step first (if not rejected and hess provided)
     step_type <- "cubic"
     used_newton <- FALSE
@@ -196,22 +228,37 @@ arcopt <- function(x0, fn, gr, hess = NULL,
         f_trial <- fn(x_trial)
         fn_evals <- fn_evals + 1
 
-        # Accept Newton step and update
-        x_previous <- x_current
-        f_previous <- f_current
+        # Check for NaN/Inf in Newton trial evaluation
+        if (!check_finite(f_trial, rep(0, length(x_trial)))) {
+          # NaN/Inf detected: skip Newton, will use cubic
+          used_newton <- FALSE
+        } else {
+          # Accept Newton step and update
+          x_previous <- x_current
+          f_previous <- f_current
 
-        x_current <- x_trial
-        f_current <- f_trial
-        g_current <- gr(x_current)
-        h_current <- hess(x_current)
-        gr_evals <- gr_evals + 1
-        hess_evals <- hess_evals + 1
+          x_current <- x_trial
+          f_current <- f_trial
+          g_current <- gr(x_current)
+          h_current <- hess(x_current)
+          gr_evals <- gr_evals + 1
+          hess_evals <- hess_evals + 1
 
-        # Decrease sigma after successful Newton step
-        sigma_current <- max(control$gamma1 * sigma_current, 1e-16)
-        prev_rejected <- FALSE
-        used_newton <- TRUE
-        step_type <- "newton"
+          # Check for NaN/Inf in new gradient
+          if (!check_finite(f_current, g_current)) {
+            stop("NaN or Inf detected in gradient at accepted Newton point")
+          }
+
+          # Track step norm and function value for stagnation detection
+          step_norms <- c(step_norms, sqrt(sum(s_current^2)))
+          f_values <- c(f_values, f_current)
+
+          # Decrease sigma after successful Newton step
+          sigma_current <- max(control$gamma1 * sigma_current, 1e-16)
+          prev_rejected <- FALSE
+          used_newton <- TRUE
+          step_type <- "newton"
+        }
       }
     }
 
@@ -232,6 +279,15 @@ arcopt <- function(x0, fn, gr, hess = NULL,
       f_trial <- fn(x_trial)
       fn_evals <- fn_evals + 1
 
+      # Check for NaN/Inf in trial evaluation
+      if (!check_finite(f_trial, rep(0, length(x_trial)))) {
+        # NaN/Inf detected: increase sigma and reject step
+        sigma_current <- min(10 * sigma_current, 1e16)
+        prev_rejected <- TRUE
+        iter <- iter + 1
+        next  # Skip to next iteration with larger sigma
+      }
+
       # Compute actual reduction and ratio
       actual_reduction <- f_current - f_trial
       rho <- actual_reduction / pred_reduction
@@ -248,6 +304,15 @@ arcopt <- function(x0, fn, gr, hess = NULL,
         h_current <- hess(x_current)
         gr_evals <- gr_evals + 1
         hess_evals <- hess_evals + 1
+
+        # Check for NaN/Inf in new gradient
+        if (!check_finite(f_current, g_current)) {
+          stop("NaN or Inf detected in gradient at accepted point")
+        }
+
+        # Track step norm and function value for stagnation detection
+        step_norms <- c(step_norms, sqrt(sum(s_current^2)))
+        f_values <- c(f_values, f_current)
 
         prev_rejected <- FALSE
       } else {
