@@ -1,0 +1,10 @@
+linters: linters_with_defaults(
+  line_length_linter = line_length_linter(120L),
+  object_name_linter = object_name_linter(styles = c("snake_case", "symbols")),
+  indentation_linter = NULL,
+  cyclocomp_linter = cyclocomp_linter(complexity_limit = 25L)
+)
+exclusions: list(
+  "R/RcppExports.R",
+  "src/RcppExports.cpp"
+)

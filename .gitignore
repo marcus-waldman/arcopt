@@ -1,0 +1,41 @@
+# R build artifacts
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.Rcheck/
+
+# Compiled code
+*.o
+*.so
+*.dll
+src/*.o
+src/*.so
+src/*.dll
+
+# Claude Code settings
+.claude/
+
+# Research documentation (not part of package)
+design/
+literature/
+
+# pkgdown site (auto-generated)
+docs/
+_site/
+
+# IDE
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Package-specific
+inst/doc
+vignettes/*.html
+vignettes/*.pdf
+
+# Empty directories
+todo/

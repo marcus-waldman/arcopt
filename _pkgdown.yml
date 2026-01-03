@@ -1,0 +1,60 @@
+url: https://marcus-waldman.github.io/arcopt/
+
+template:
+  bootstrap: 5
+  bootswatch: flatly
+
+home:
+  title: arcopt - Adaptive Regularization using Cubics
+  description: Robust optimization for statistical models with cubic regularization
+
+navbar:
+  structure:
+    left:  [home, reference, articles, news]
+    right: [search, github]
+  components:
+    home:
+      icon: fas fa-home fa-lg
+      href: index.html
+    reference:
+      text: Reference
+      href: reference/index.html
+    articles:
+      text: Articles
+      menu:
+      - text: -------
+      - text: Design Documentation
+      - text: Design Principles
+        href: https://github.com/marcus-waldman/arcopt/blob/main/design/design-principles.qmd
+      - text: Pseudocode Reference
+        href: https://github.com/marcus-waldman/arcopt/blob/main/design/pseudocode.qmd
+      - text: Literature Review
+        href: https://github.com/marcus-waldman/arcopt/blob/main/design/literature-review.qmd
+    news:
+      text: Changelog
+      href: news/index.html
+    github:
+      icon: fab fa-github fa-lg
+      href: https://github.com/marcus-waldman/arcopt
+
+reference:
+  - title: Main Functions
+    desc: Primary user-facing optimization functions
+    contents:
+    - arcopt
+    - starts_with("arcopt_")
+
+  - title: Algorithm Components
+    desc: Internal algorithm implementations
+    contents:
+    - has_concept("algorithms")
+
+  - title: Constraint Handling
+    desc: Box and linear equality constraints
+    contents:
+    - has_concept("constraints")
+
+  - title: Utility Functions
+    desc: Helper functions and diagnostics
+    contents:
+    - has_concept("utils")
