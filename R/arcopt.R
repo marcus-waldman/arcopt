@@ -127,8 +127,8 @@ arcopt <- function(x0, fn, gr, hess = NULL,
 
   control <- modifyList(control_defaults, control)
 
-  # Project initial point to bounds (for future box constraint support)
-  x_current <- pmax(lower, pmin(upper, x0))
+  # Validate and project initial point to bounds
+  x_current <- validate_and_project_initial(x0, lower, upper)
 
   # Initialize tracking variables
   sigma_current <- control$sigma0
@@ -224,7 +224,11 @@ arcopt <- function(x0, fn, gr, hess = NULL,
       if (newton_result$success) {
         # Newton step succeeded
         s_current <- newton_result$s
-        x_trial <- x_current + s_current
+
+        # Apply box constraints to Newton step
+        box_result <- apply_box_constraints(x_current, s_current, lower, upper)
+        s_current <- box_result$s_bounded
+        x_trial <- box_result$x_new
         f_trial <- fn(x_trial)
         fn_evals <- fn_evals + 1
 
@@ -274,8 +278,12 @@ arcopt <- function(x0, fn, gr, hess = NULL,
       s_current <- cubic_result$s
       pred_reduction <- cubic_result$pred_reduction
 
+      # Apply box constraints to cubic step
+      box_result <- apply_box_constraints(x_current, s_current, lower, upper)
+      s_current <- box_result$s_bounded
+      x_trial <- box_result$x_new
+
       # Evaluate trial point
-      x_trial <- x_current + s_current
       f_trial <- fn(x_trial)
       fn_evals <- fn_evals + 1
 

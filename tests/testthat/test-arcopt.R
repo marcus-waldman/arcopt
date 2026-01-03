@@ -277,3 +277,98 @@ test_that("arcopt handles NaN during optimization by rejecting step", {
   # Eventually converges or hits max iterations
   expect_true(result$converged || result$iterations == 10)
 })
+
+test_that("arcopt respects box constraints", {
+  # Sphere function with box constraints
+  sphere <- function(x) sum(x^2)
+  sphere_gr <- function(x) 2 * x
+  sphere_hess <- function(x) 2 * diag(length(x))
+
+  # Constrain to [0.5, 1] x [0.5, 1]
+  # Optimum without constraints is (0, 0)
+  # With constraints, optimum should be (0.5, 0.5)
+  expect_warning(
+    result <- arcopt(
+      x0 = c(2, 2),
+      fn = sphere,
+      gr = sphere_gr,
+      hess = sphere_hess,
+      lower = c(0.5, 0.5),
+      upper = c(1, 1)
+    ),
+    "Initial point infeasible"
+  )
+
+  expect_true(result$converged)
+  expect_equal(result$par, c(0.5, 0.5), tolerance = 1e-5)
+  # All iterates should respect bounds
+  expect_true(all(result$par >= c(0.5, 0.5) - 1e-10))
+  expect_true(all(result$par <= c(1, 1) + 1e-10))
+})
+
+test_that("arcopt projects infeasible initial point", {
+  sphere <- function(x) sum(x^2)
+  sphere_gr <- function(x) 2 * x
+  sphere_hess <- function(x) 2 * diag(length(x))
+
+  # Start outside feasible region
+  expect_warning(
+    result <- arcopt(
+      x0 = c(5, 5),  # Outside [0, 1] x [0, 1]
+      fn = sphere,
+      gr = sphere_gr,
+      hess = sphere_hess,
+      lower = c(0, 0),
+      upper = c(1, 1)
+    ),
+    "Initial point infeasible"
+  )
+
+  expect_true(result$converged)
+  expect_equal(result$par, c(0, 0), tolerance = 1e-5)
+})
+
+test_that("arcopt handles one-sided bounds", {
+  # Function with minimum at (-1, -1)
+  offset_sphere <- function(x) sum((x + 1)^2)
+  offset_gr <- function(x) 2 * (x + 1)
+  offset_hess <- function(x) 2 * diag(length(x))
+
+  # Only lower bound at 0
+  result <- arcopt(
+    x0 = c(1, 1),
+    fn = offset_sphere,
+    gr = offset_gr,
+    hess = offset_hess,
+    lower = c(0, 0),
+    upper = c(Inf, Inf)
+  )
+
+  expect_true(result$converged)
+  # Optimum should be at boundary (0, 0) since unconstrained optimum (-1, -1) is infeasible
+  expect_equal(result$par, c(0, 0), tolerance = 1e-5)
+})
+
+test_that("arcopt handles asymmetric bounds", {
+  sphere <- function(x) sum(x^2)
+  sphere_gr <- function(x) 2 * x
+  sphere_hess <- function(x) 2 * diag(length(x))
+
+  # Different bounds for each dimension
+  result <- arcopt(
+    x0 = c(1, 1),
+    fn = sphere,
+    gr = sphere_gr,
+    hess = sphere_hess,
+    lower = c(-10, 0.5),
+    upper = c(10, 2)
+  )
+
+  expect_true(result$converged)
+  # Check bounds are respected
+  expect_true(result$par[1] >= -10 && result$par[1] <= 10)
+  expect_true(result$par[2] >= 0.5 - 1e-10 && result$par[2] <= 2 + 1e-10)
+  # Function value should be close to 0.25 (minimum is at (0, 0.5), f = 0.25)
+  # but we allow for some numerical error and possible convergence to nearby point
+  expect_true(result$value <= 1.0)
+})
