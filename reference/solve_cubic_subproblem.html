@@ -97,10 +97,11 @@ using a modified Cholesky factorization approach with secular equation iteration
     <div class="section level2">
     <h2 id="details">Details<a class="anchor" aria-label="anchor" href="#details"></a></h2>
     <p>The algorithm solves the secular equation norm(s(lambda)) = lambda/sigma where
-s(lambda) = -(H + lambda*I)^(-1) * g. This is done using:</p><ol><li><p>Cholesky factorization with iterative diagonal shift for indefinite H</p></li>
+s(lambda) = -(H + lambda*I)^(-1) * g. This is done using:</p><ol><li><p>Modified Cholesky (fastmatrix::mchol) to determine minimum shift lambda_lower</p></li>
 <li><p>Newton-Raphson iteration on the secular equation phi(lambda) = ||s|| - lambda/sigma</p></li>
-</ol><p>When H is positive definite, the algorithm starts with lambda = 0. When H is
-indefinite, it automatically adds a diagonal shift until factorization succeeds.</p>
+</ol><p>Uses fastmatrix::ldl() to compute the LDL decomposition. The diagonal D contains
+eigenvalue information - negative diagonal elements indicate indefiniteness. The
+minimum shift lambda_lower = max(0, -min(D)) ensures positive definiteness.</p>
     </div>
 
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
