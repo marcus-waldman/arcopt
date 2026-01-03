@@ -1,0 +1,23 @@
+<urlset xmlns = 'http://www.sitemaps.org/schemas/sitemap/0.9'>
+<url><loc>https://marcus-waldman.github.io/arcopt/404.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/CLAUDE.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/LICENSE-text.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/LICENSE.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/authors.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/index.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/news/index.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/apply_box_constraints.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/arcopt-package.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/arcopt.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/check_convergence.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/check_finite.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/detect_stagnation.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/index.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/project_to_box.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/solve_cubic_subproblem.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/try_newton_step.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/update_sigma_cgt.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/update_sigma_interpolation.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/validate_and_project_initial.html</loc></url>
+</urlset>
+
