@@ -4,9 +4,7 @@ Title: Adaptive Regularization using Cubics for Optimization
 Version: 0.1.0
 Authors@R: c(
     person("Marcus", "Waldman", email = "your.email@domain.com",
-           role = c("aut", "cre"),
-           comment = c(ORCID = "YOUR-ORCID-ID"))
-)
+           role = c("aut", "cre")))
 Description: Implements cubic regularization methods (ARC) for local
     optimization problems common in statistics and applied research. Provides
     robust handling of ill-conditioned, nonconvex, and indefinite Hessian
@@ -21,7 +19,7 @@ Depends:
     R (>= 4.1.0)
 Imports:
     Rcpp (>= 1.0.0),
-    methods
+    utils
 LinkingTo:
     Rcpp
 Suggests:
@@ -30,5 +28,5 @@ Suggests:
     rmarkdown,
     covr
 VignetteBuilder: knitr
-RoxygenNote: 7.3.2
+RoxygenNote: 7.3.3
 Roxygen: list(markdown = TRUE)
