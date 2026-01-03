@@ -33,6 +33,17 @@ solve_cubic_subproblem <- function(g, H, sigma,
                                    lambda_tol = 1e-10) {
   n <- length(g)
 
+  # Handle zero gradient case: optimal step is s = 0
+  g_norm <- sqrt(sum(g^2))
+  if (g_norm < .Machine$double.eps) {
+    return(list(
+      s = rep(0, n),
+      lambda = 0,
+      pred_reduction = 0,
+      converged = TRUE
+    ))
+  }
+
   # STEP 1: Modified Cholesky via LDL to get perturbation
   ldl_result <- fastmatrix::ldl(H)
   d_diag <- ldl_result$d
@@ -41,12 +52,27 @@ solve_cubic_subproblem <- function(g, H, sigma,
   # If any diagonal element is negative, that's the minimum eigenvalue
   lambda_lower <- max(0, -min(d_diag))
 
-  # Add small buffer for numerical safety
-  eps <- 1e-12
-  lambda <- if (lambda_lower > 0) lambda_lower + eps else 0
+  # Use sqrt(machine epsilon) as robust buffer
 
-  # Get Cholesky factor
-  chol_factor <- chol(H + lambda * diag(n))
+  # sqrt(.Machine$double.eps) ≈ 1.49e-8 - standard numerical tolerance
+  # This ensures H + lambda*I is strictly positive definite (not just semi-definite)
+  sqrt_eps <- sqrt(.Machine$double.eps)
+  eps <- max(sqrt_eps, sqrt_eps * lambda_lower)
+  lambda <- lambda_lower + eps
+
+  # Get Cholesky factor with retry on failure
+  chol_factor <- NULL
+  for (attempt in 1:5) {
+    chol_factor <- tryCatch(
+      chol(H + lambda * diag(n)),
+      error = function(e) NULL
+    )
+    if (!is.null(chol_factor)) break
+    lambda <- lambda * 2  # Double lambda and retry
+  }
+  if (is.null(chol_factor)) {
+    stop("Failed to compute Cholesky factorization of regularized Hessian")
+  }
 
   # STEP 2: Solve initial system (H + lambda*I) s = -g
   # Since R's chol gives upper triangular U where H + lambda*I = U^T U:
@@ -80,8 +106,24 @@ solve_cubic_subproblem <- function(g, H, sigma,
     lambda_new <- lambda - phi / phi_prime
     lambda_new <- max(lambda_new, lambda_lower)  # Stay in valid region
 
-    # Recompute factorization and solution for new lambda
-    chol_factor <- chol(H + lambda_new * diag(n))
+    # Recompute factorization and solution for new lambda with retry on failure
+    chol_success <- FALSE
+    for (chol_attempt in 1:5) {
+      chol_result <- tryCatch(
+        chol(H + lambda_new * diag(n)),
+        error = function(e) NULL
+      )
+      if (!is.null(chol_result)) {
+        chol_factor <- chol_result
+        chol_success <- TRUE
+        break
+      }
+      lambda_new <- lambda_new * 2  # Double lambda and retry
+    }
+    if (!chol_success) {
+      # If all retries fail, stop iterating and use current solution
+      break
+    }
     s <- backsolve(chol_factor, backsolve(chol_factor, -g, transpose = TRUE))
     lambda <- lambda_new
   }
