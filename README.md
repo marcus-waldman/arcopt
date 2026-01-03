@@ -1,33 +1,16 @@
-# arcopt: Adaptive Regularization using Cubics for R
+# arcopt
 
-<!-- badges: start -->
-[![R-CMD-check](https://github.com/marcus-waldman/arcopt/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/marcus-waldman/arcopt/actions/workflows/R-CMD-check.yaml)
-[![Codecov test coverage](https://codecov.io/gh/marcus-waldman/arcopt/branch/main/graph/badge.svg)](https://app.codecov.io/gh/marcus-waldman/arcopt)
-[![lint](https://github.com/marcus-waldman/arcopt/actions/workflows/lint.yaml/badge.svg)](https://github.com/marcus-waldman/arcopt/actions/workflows/lint.yaml)
-[![CRAN status](https://www.r-pkg.org/badges/version/arcopt)](https://CRAN.R-project.org/package=arcopt)
-<!-- badges: end -->
+Adaptive Regularization using Cubics (ARC) optimizer for R.
 
-## Overview
-
-**arcopt** implements cubic regularization methods (ARC) for robust local optimization in statistical applications. Designed for statisticians and applied researchers working with challenging optimization landscapes common in maximum likelihood estimation, posterior mode finding, and nonlinear regression.
-
-### Key Features
-
-- **Hessian-Centric**: Leverages second-order information for faster convergence on ill-conditioned problems
-- **Robust by Default**: Handles indefinite Hessians and saddle points automatically without manual tuning
-- **Constraint Support**: Box constraints and linear equality constraints built-in
-- **Diagnostic Rich**: Comprehensive convergence diagnostics and algorithm insights
+Handles indefinite Hessians, ill-conditioned problems, and saddle points automatically. Designed for robust optimization in statistical applications (MLE, posterior modes, nonlinear regression).
 
 ## Installation
 
-You can install the development version of arcopt from [GitHub](https://github.com/marcus-waldman/arcopt) with:
-
 ```r
-# install.packages("pak")
 pak::pak("marcus-waldman/arcopt")
 ```
 
-## Quick Start
+## Usage
 
 ```r
 library(arcopt)
@@ -59,54 +42,27 @@ result <- arcopt(
   hess = rosenbrock_hess
 )
 
-result$par      # Optimal parameters
-result$value    # Optimal function value
-result$converged  # Convergence status
+result$par       # Optimal parameters
+result$value     # Optimal function value
+result$converged # Convergence status
 ```
 
-## Why arcopt?
+## Features
 
-Traditional optimization methods struggle with:
-- **Ill-conditioned Hessians**: Poor scaling, high condition numbers
-- **Indefinite curvature**: Negative eigenvalues, saddle points
-- **Nonconvex landscapes**: Local minima, ridges
+- **Robust**: Handles indefinite and ill-conditioned Hessians via cubic regularization
+- **Box constraints**: Optional parameter bounds
+- **Safeguards**: Automatic stagnation detection and NaN/Inf protection
+- **Newton-first**: Tries pure Newton when Hessian is positive definite
+- **Adaptive**: Two sigma update strategies (classical CGT and interpolation)
 
-**arcopt** handles these challenges through:
-1. **Cubic regularization**: Adaptively regularizes indefinite Hessians
-2. **Modified Cholesky**: Ensures numerical stability even with negative curvature
-3. **Intelligent safeguards**: Automatic stagnation detection, NaN/Inf handling
+## Requirements
 
-## Documentation
+- R >= 4.0
+- Analytic Hessian function required
 
-- [Function Reference](https://marcus-waldman.github.io/arcopt/reference/): Complete API documentation
-- [Introduction Vignette](https://marcus-waldman.github.io/arcopt/articles/arcopt-introduction.html): Getting started guide
-- [Algorithm Details](https://github.com/marcus-waldman/arcopt/blob/main/design/pseudocode.qmd): Implementation specifications
-- [Design Principles](https://github.com/marcus-waldman/arcopt/blob/main/design/design-principles.qmd): Design philosophy
+## Reference
 
-## Comparison with Other Methods
-
-| Method | Handles Indefinite H | Escapes Saddles | Requires Tuning |
-|--------|---------------------|-----------------|-----------------|
-| Newton | ❌ (fails) | ❌ | N/A |
-| Trust-region Newton | ⚠️ (with modifications) | ⚠️ | ✅ (radius) |
-| BFGS/L-BFGS | ⚠️ (maintains PD approx) | ❌ | ✅ (initial Hessian) |
-| **ARC (arcopt)** | ✅ (native) | ✅ (automatic) | ❌ (adaptive σ) |
-
-## Citation
-
-If you use arcopt in your research, please cite:
-
-```r
-citation("arcopt")
-```
-
-And consider citing the foundational ARC paper:
-
-> Cartis, C., Gould, N. I. M., & Toint, P. L. (2011). Adaptive cubic regularisation methods for unconstrained optimization. Part I: Motivation, convergence and numerical results. *Mathematical Programming*, 127(2), 245-295. https://doi.org/10.1007/s10107-009-0286-5
-
-## Contributing
-
-Contributions are welcome! Please see the [development guidelines](https://marcus-waldman.github.io/arcopt/articles/contributing.html) for details.
+Cartis, C., Gould, N. I. M., & Toint, P. L. (2011). Adaptive cubic regularisation methods for unconstrained optimization. *Mathematical Programming*, 127(2), 245-295.
 
 ## License
 
