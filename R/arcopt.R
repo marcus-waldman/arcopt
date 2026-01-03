@@ -54,6 +54,7 @@
 #' * `evaluations`: List with `fn`, `gr`, and `hess` evaluation counts
 #' * `message`: Convergence message
 #'
+#' @importFrom utils modifyList
 #' @export
 #' @examples
 #' \donttest{
@@ -126,25 +127,162 @@ arcopt <- function(x0, fn, gr, hess = NULL,
 
   control <- modifyList(control_defaults, control)
 
-  # Project initial point to bounds
-  x <- pmax(lower, pmin(upper, x0))
+  # Project initial point to bounds (for future box constraint support)
+  x_current <- pmax(lower, pmin(upper, x0))
 
-  # Placeholder implementation
-  # TODO: Implement full ARC algorithm (Algorithms 0-8 from design/pseudocode.qmd)
-  warning("arcopt is not yet fully implemented - returning initial point")
+  # Initialize tracking variables
+  sigma_current <- control$sigma0
+  iter <- 0
+  prev_rejected <- FALSE
+  fn_evals <- 0
+  gr_evals <- 0
+  hess_evals <- 0
 
-  # Evaluate at initial point
-  f_val <- fn(x)
-  g_val <- gr(x)
+  # Initial evaluation
+  f_current <- fn(x_current)
+  g_current <- gr(x_current)
+  fn_evals <- fn_evals + 1
+  gr_evals <- gr_evals + 1
+
+  if (!is.null(hess)) {
+    h_current <- hess(x_current)
+    hess_evals <- hess_evals + 1
+  } else {
+    stop("hess function is required for this implementation")
+  }
+
+  # Store previous values for convergence checking
+  f_previous <- NA
+  x_previous <- NULL
+
+  converged <- FALSE
+  conv_reason <- ""
+
+  # Main optimization loop
+  while (iter < control$maxit) {
+    # STEP 1: Check convergence
+    conv_result <- check_convergence(
+      g_current = g_current,
+      f_current = f_current,
+      f_previous = f_previous,
+      x_current = x_current,
+      x_previous = x_previous,
+      iter = iter,
+      tol_grad = control$gtol_abs,
+      tol_rel_grad = 1e-6,
+      tol_obj = control$ftol_abs,
+      tol_rel_obj = 1e-8,
+      tol_param = control$xtol_abs,
+      max_iter = control$maxit
+    )
+
+    if (conv_result$converged) {
+      converged <- TRUE
+      conv_reason <- conv_result$reason
+      break
+    }
+
+    # STEP 2: Try Newton step first (if not rejected and hess provided)
+    step_type <- "cubic"
+    used_newton <- FALSE
+
+    if (!prev_rejected && !is.null(hess)) {
+      newton_result <- try_newton_step(g_current, h_current)
+
+      if (newton_result$success) {
+        # Newton step succeeded
+        s_current <- newton_result$s
+        x_trial <- x_current + s_current
+        f_trial <- fn(x_trial)
+        fn_evals <- fn_evals + 1
+
+        # Accept Newton step and update
+        x_previous <- x_current
+        f_previous <- f_current
+
+        x_current <- x_trial
+        f_current <- f_trial
+        g_current <- gr(x_current)
+        h_current <- hess(x_current)
+        gr_evals <- gr_evals + 1
+        hess_evals <- hess_evals + 1
+
+        # Decrease sigma after successful Newton step
+        sigma_current <- max(control$gamma1 * sigma_current, 1e-16)
+        prev_rejected <- FALSE
+        used_newton <- TRUE
+        step_type <- "newton"
+      }
+    }
+
+    # STEP 3: If Newton failed/skipped, use cubic solver
+    if (!used_newton) {
+      # Solve cubic subproblem
+      cubic_result <- solve_cubic_subproblem(
+        g = g_current,
+        H = h_current,
+        sigma = sigma_current
+      )
+
+      s_current <- cubic_result$s
+      pred_reduction <- cubic_result$pred_reduction
+
+      # Evaluate trial point
+      x_trial <- x_current + s_current
+      f_trial <- fn(x_trial)
+      fn_evals <- fn_evals + 1
+
+      # Compute actual reduction and ratio
+      actual_reduction <- f_current - f_trial
+      rho <- actual_reduction / pred_reduction
+
+      # Accept or reject step
+      if (rho >= control$eta1) {
+        # Accept step
+        x_previous <- x_current
+        f_previous <- f_current
+
+        x_current <- x_trial
+        f_current <- f_trial
+        g_current <- gr(x_current)
+        h_current <- hess(x_current)
+        gr_evals <- gr_evals + 1
+        hess_evals <- hess_evals + 1
+
+        prev_rejected <- FALSE
+      } else {
+        # Reject step - keep current point, will re-solve with updated sigma
+        prev_rejected <- TRUE
+      }
+
+      # Update sigma based on step quality
+      sigma_current <- update_sigma_cgt(
+        sigma_current = sigma_current,
+        rho = rho,
+        eta1 = control$eta1,
+        eta2 = control$eta2,
+        gamma1 = control$gamma1,
+        gamma2 = control$gamma2
+      )
+    }
+
+    iter <- iter + 1
+  }
+
+  # Check if we hit max iterations without converging
+  if (!converged && iter >= control$maxit) {
+    converged <- TRUE
+    conv_reason <- "max_iter"
+  }
 
   list(
-    par = x,
-    value = f_val,
-    gradient = g_val,
-    hessian = if (!is.null(hess)) hess(x) else NULL,
-    converged = FALSE,
-    iterations = 0,
-    evaluations = list(fn = 1, gr = 1, hess = if (!is.null(hess)) 1 else 0),
-    message = "Implementation pending - see design/pseudocode.qmd for algorithm specification"
+    par = x_current,
+    value = f_current,
+    gradient = g_current,
+    hessian = h_current,
+    converged = converged,
+    iterations = iter,
+    evaluations = list(fn = fn_evals, gr = gr_evals, hess = hess_evals),
+    message = conv_reason
   )
 }
