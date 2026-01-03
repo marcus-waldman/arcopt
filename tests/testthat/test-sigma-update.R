@@ -118,3 +118,119 @@ test_that("sigma update uses default parameters correctly", {
   # Default gamma1 = 0.5
   expect_equal(result, 0.5)
 })
+
+# Tests for Algorithm 2b (Interpolation-Enhanced)
+
+test_that("interpolation sigma update handles very successful step", {
+  # rho >= eta2 should use interpolation with CGT decrease
+  sigma_current <- 1.0
+  rho <- 0.95
+  s <- c(0.1, 0.1)
+  f_trial <- 1.0
+  m_trial <- 1.01  # Small discrepancy
+  eta1 <- 0.1
+  eta2 <- 0.9
+  gamma1 <- 0.5
+
+  result <- update_sigma_interpolation(sigma_current, rho, s, f_trial, m_trial,
+                                       eta1, eta2, gamma1)
+
+  # Should be max(l_hat/2, gamma1*sigma, sigma_min)
+  # Result should be finite and positive
+  expect_true(is.finite(result))
+  expect_true(result > 0)
+  expect_true(result >= 1e-16)  # Above sigma_min
+})
+
+test_that("interpolation sigma update handles moderately successful step", {
+  # eta1 <= rho < eta2 should keep sigma unchanged (same as CGT)
+  sigma_current <- 1.0
+  rho <- 0.5
+  s <- c(0.1, 0.1)
+  f_trial <- 1.0
+  m_trial <- 1.0
+  eta1 <- 0.1
+  eta2 <- 0.9
+
+  result <- update_sigma_interpolation(sigma_current, rho, s, f_trial, m_trial,
+                                       eta1, eta2)
+
+  expect_equal(result, sigma_current)
+})
+
+test_that("interpolation sigma update handles unsuccessful step", {
+  # rho < eta1 should use interpolation with CGT increase
+  sigma_current <- 1.0
+  rho <- 0.05
+  s <- c(0.1, 0.1)
+  f_trial <- 1.0
+  m_trial <- 0.5  # Large discrepancy
+  eta1 <- 0.1
+  eta2 <- 0.9
+  gamma2 <- 2.0
+
+  result <- update_sigma_interpolation(sigma_current, rho, s, f_trial, m_trial,
+                                       eta1, eta2, gamma2 = gamma2)
+
+  # Should be min(max(l_hat/2, gamma2*sigma), sigma_max)
+  expect_true(result >= sigma_current)  # Should increase
+})
+
+test_that("interpolation sigma update handles zero step", {
+  # Very small step should not cause division by zero
+  sigma_current <- 1.0
+  rho <- 0.95
+  s <- c(0, 0)  # Zero step
+  f_trial <- 1.0
+  m_trial <- 1.0
+
+  result <- update_sigma_interpolation(sigma_current, rho, s, f_trial, m_trial)
+
+  # Should fall back to current sigma or default behavior
+  expect_true(is.finite(result))
+  expect_true(result > 0)
+})
+
+test_that("interpolation sigma update respects sigma_min", {
+  sigma_current <- 1e-15
+  rho <- 0.95
+  s <- c(0.1, 0.1)
+  f_trial <- 1.0
+  m_trial <- 1.0
+  sigma_min <- 1e-16
+
+  result <- update_sigma_interpolation(sigma_current, rho, s, f_trial, m_trial,
+                                       sigma_min = sigma_min)
+
+  expect_true(result >= sigma_min)
+})
+
+test_that("interpolation sigma update respects sigma_max", {
+  sigma_current <- 1e16
+  rho <- 0.05  # Unsuccessful
+  s <- c(0.1, 0.1)
+  f_trial <- 1.0
+  m_trial <- 0.0  # Large discrepancy
+  sigma_max <- 1e16
+
+  result <- update_sigma_interpolation(sigma_current, rho, s, f_trial, m_trial,
+                                       sigma_max = sigma_max)
+
+  expect_true(result <= sigma_max)
+})
+
+test_that("interpolation sigma estimates Lipschitz constant", {
+  # Test that l_hat is computed correctly
+  sigma_current <- 1.0
+  rho <- 0.95
+  s <- c(1, 0)  # Step of length 1
+  f_trial <- 1.0
+  m_trial <- 0.5  # Discrepancy of 0.5
+
+  # L_hat = 2 * |f_trial - m_trial| / ||s||^3 = 2 * 0.5 / 1 = 1.0
+  # For very successful: sigma_new = max(l_hat/2, gamma1*sigma, sigma_min)
+  #                                 = max(0.5, 0.5, 1e-16) = 0.5
+  result <- update_sigma_interpolation(sigma_current, rho, s, f_trial, m_trial)
+
+  expect_equal(result, 0.5)
+})
