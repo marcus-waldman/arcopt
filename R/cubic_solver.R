@@ -19,12 +19,13 @@
 #' The algorithm solves the secular equation norm(s(lambda)) = lambda/sigma where
 #' s(lambda) = -(H + lambda*I)^(-1) * g. This is done using:
 #' \enumerate{
-#'   \item Cholesky factorization with iterative diagonal shift for indefinite H
+#'   \item Modified Cholesky (fastmatrix::mchol) to determine minimum shift lambda_lower
 #'   \item Newton-Raphson iteration on the secular equation phi(lambda) = ||s|| - lambda/sigma
 #' }
 #'
-#' When H is positive definite, the algorithm starts with lambda = 0. When H is
-#' indefinite, it automatically adds a diagonal shift until factorization succeeds.
+#' Uses fastmatrix::ldl() to compute the LDL decomposition. The diagonal D contains
+#' eigenvalue information - negative diagonal elements indicate indefiniteness. The
+#' minimum shift lambda_lower = max(0, -min(D)) ensures positive definiteness.
 #'
 #' @keywords internal
 solve_cubic_subproblem <- function(g, H, sigma,
@@ -32,51 +33,26 @@ solve_cubic_subproblem <- function(g, H, sigma,
                                    lambda_tol = 1e-10) {
   n <- length(g)
 
-  # STEP 1: Try initial factorization with lambda = 0
-  lambda <- 0
-  eps <- 1e-12  # Small shift for indefinite case
+  # STEP 1: Modified Cholesky via LDL to get perturbation
+  ldl_result <- fastmatrix::ldl(H)
+  d_diag <- ldl_result$d
 
-  # Try Cholesky of H
-  chol_result <- tryCatch(
-    {
-      chol_factor <- chol(H)  # Returns upper triangular; R's chol gives U where H = U^T U
-      list(success = TRUE, chol_factor = chol_factor, lambda_lower = 0)
-    },
-    error = function(e) {
-      # H is not positive definite, need to find minimum shift
-      # Use Gershgorin theorem: smallest eigenvalue >= min_i(H[i,i] - sum_j|H[i,j]|)
-      row_sums <- sapply(1:n, function(i) sum(abs(H[i, -i])))
-      lambda_lower <- max(0, -min(diag(H) - row_sums))
-      lambda <- lambda_lower + eps
+  # Minimum eigenvalue approximation from LDL diagonal
+  # If any diagonal element is negative, that's the minimum eigenvalue
+  lambda_lower <- max(0, -min(d_diag))
 
-      # Try factorization with shift
-      chol_factor <- tryCatch(
-        chol(H + lambda * diag(n)),
-        error = function(e2) NULL
-      )
+  # Add small buffer for numerical safety
+  eps <- 1e-12
+  lambda <- if (lambda_lower > 0) lambda_lower + eps else 0
 
-      if (is.null(chol_factor)) {
-        # Even with shift failed; use larger shift
-        lambda <- lambda_lower + 1.0
-        chol_factor <- chol(H + lambda * diag(n))
-      }
-
-      list(success = TRUE, chol_factor = chol_factor, lambda_lower = lambda_lower)
-    }
-  )
-
-  chol_factor <- chol_result$chol_factor
-  lambda_lower <- chol_result$lambda_lower
+  # Get Cholesky factor
+  chol_factor <- chol(H + lambda * diag(n))
 
   # STEP 2: Solve initial system (H + lambda*I) s = -g
   # Since R's chol gives upper triangular U where H + lambda*I = U^T U:
   # U^T U s = -g
   # First solve U^T w = -g for w, then solve U s = w for s
-  if (lambda == 0) {
-    s <- backsolve(chol_factor, backsolve(chol_factor, -g, transpose = TRUE))
-  } else {
-    s <- backsolve(chol_factor, backsolve(chol_factor, -g, transpose = TRUE))
-  }
+  s <- backsolve(chol_factor, backsolve(chol_factor, -g, transpose = TRUE))
 
   # STEP 3: Iterate secular equation ||s(lambda)|| = lambda/sigma
   converged <- FALSE
@@ -102,7 +78,7 @@ solve_cubic_subproblem <- function(g, H, sigma,
 
     # Update lambda
     lambda_new <- lambda - phi / phi_prime
-    lambda_new <- max(lambda_new, lambda_lower + eps)  # Stay in valid region
+    lambda_new <- max(lambda_new, lambda_lower)  # Stay in valid region
 
     # Recompute factorization and solution for new lambda
     chol_factor <- chol(H + lambda_new * diag(n))

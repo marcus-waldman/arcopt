@@ -32,11 +32,12 @@ using a modified Cholesky factorization approach with secular equation iteration
 The algorithm solves the secular equation norm(s(lambda)) = lambda/sigma where
 s(lambda) = -(H + lambda*I)^(-1) * g. This is done using:
 \enumerate{
-\item Cholesky factorization with iterative diagonal shift for indefinite H
+\item Modified Cholesky (fastmatrix::mchol) to determine minimum shift lambda_lower
 \item Newton-Raphson iteration on the secular equation phi(lambda) = ||s|| - lambda/sigma
 }
 
-When H is positive definite, the algorithm starts with lambda = 0. When H is
-indefinite, it automatically adds a diagonal shift until factorization succeeds.
+Uses fastmatrix::ldl() to compute the LDL decomposition. The diagonal D contains
+eigenvalue information - negative diagonal elements indicate indefiniteness. The
+minimum shift lambda_lower = max(0, -min(D)) ensures positive definiteness.
 }
 \keyword{internal}
