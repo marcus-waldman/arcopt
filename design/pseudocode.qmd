@@ -1,0 +1,1439 @@
+---
+title: "ARC Algorithm Pseudocode Reference"
+subtitle: "Adaptive Regularization using Cubics"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+  pdf:
+    documentclass: article
+    toc: true
+    number-sections: true
+    header-includes:
+      - \usepackage{algorithm}
+      - \usepackage{algpseudocode}
+      - \usepackage{amsmath}
+      - \usepackage{amssymb}
+---
+
+# Introduction
+
+This document provides implementation-ready pseudocode for the arcopt package, which implements Adaptive Regularization using Cubics (ARC). A programmer unfamiliar with the project but knowledgeable in optimization should be able to implement the complete system from these specifications.
+
+## Architecture Overview
+
+The optimizer consists of **9 algorithm groups** organized into 4 layers:
+
+| Layer | Components | Purpose |
+|-------|------------|---------|
+| **Orchestration** | Algorithm 1 (Main Loop) | Controls iteration flow, dispatches to sub-algorithms |
+| **Core Solvers** | Algorithms 1a, 5 | Newton step, cubic subproblem solver |
+| **Adaptation** | Algorithms 0, 2a/2b, 3, 4 | Convergence, σ updates, momentum, quasi-Newton |
+| **Safeguards** | Algorithms 6a/6b, 7, 8 | Robustness, constraints |
+
+## System Flowchart
+
+```{mermaid}
+%%| fig-width: 8
+%%| fig-height: 10
+flowchart TD
+    subgraph INIT["Initialization"]
+        A[x₀, σ₀, parameters] --> A2{fnscale ≠ 1?}
+        A2 -->|Yes| A3[Wrap f, g, H<br/>with fnscale]
+        A2 -->|No| B
+        A3 --> B
+        B{Constraints?}
+        B -->|Box| C[Validate & project x₀<br/>Algorithm 7b]
+        B -->|Linear Eq| D[Compute null space Z<br/>Transform to z-space<br/>Algorithm 8a-b]
+        B -->|None| E[Use x₀ directly]
+        C --> F[Main Loop]
+        D --> F
+        E --> F
+    end
+
+    subgraph MAIN["Main Loop (Algorithm 1)"]
+        F --> G{Previous step<br/>rejected?}
+        G -->|Yes| H[Skip evaluation<br/>Reuse f, g, H]
+        G -->|No| I[Evaluate f, g, H]
+
+        I --> J[Convergence Check<br/>Algorithm 0]
+        H --> K[Cubic Subproblem]
+        J -->|Converged| DONE[Return x*]
+        J -->|Continue| L{Quasi-Newton?}
+
+        L -->|Yes| K
+        L -->|No| M[Try Newton Step<br/>Algorithm 1a]
+
+        M -->|Success| N[Accept Newton step<br/>Decrease σ]
+        M -->|Fail| K
+    end
+
+    subgraph CUBIC["Cubic Subproblem (Algorithm 5)"]
+        K --> P[Modified Cholesky Solver<br/>LDL → iterate λ]
+        P --> R[Step s]
+    end
+
+    subgraph EVAL["Step Evaluation"]
+        R --> S{Box<br/>constraints?}
+        S -->|Yes| T[Truncate step<br/>Algorithm 7a]
+        S -->|No| U[Use s directly]
+        T --> V[Evaluate f_trial]
+        U --> V
+        V --> W[Compute ρ = actual/predicted]
+    end
+
+    subgraph UPDATE["Updates"]
+        W --> X{ρ ≥ η₁?}
+        X -->|Yes| Y[Accept: x ← x + s]
+        X -->|No| Z[Reject: x unchanged<br/>Mark rejected]
+
+        Y --> AA[Update σ<br/>Algorithm 2a/2b]
+        Z --> AA
+
+        AA --> AB{Using<br/>momentum?}
+        AB -->|Yes| AC[Apply momentum<br/>Algorithm 3]
+        AB -->|No| AD[Continue]
+        AC --> AD
+
+        AD --> AE{Using SR1?}
+        AE -->|Yes| AF[Update B<br/>Algorithm 4]
+        AE -->|No| AG[Continue]
+        AF --> AG
+
+        AG --> AH{NaN/Inf<br/>detected?}
+        AH -->|Yes| AI[Recovery<br/>Algorithm 6b]
+        AH -->|No| AJ{Stagnation?}
+        AI --> F
+        AJ -->|Yes| AK[Recovery<br/>Algorithm 6a]
+        AJ -->|No| F
+        AK --> F
+    end
+
+    N --> AA
+
+    style INIT fill:#e1f5fe
+    style MAIN fill:#fff3e0
+    style CUBIC fill:#f3e5f5
+    style EVAL fill:#e8f5e9
+    style UPDATE fill:#fce4ec
+```
+
+## Algorithm Index
+
+| Algorithm | Name | Section | Purpose |
+|-----------|------|---------|---------|
+| 0 | Convergence Check | §3 | Stan-style multi-criteria termination |
+| 1 | Main ARC Loop | §4 | Orchestrates Newton-first + cubic fallback |
+| 1a | Newton Step | §4.2 | Gershgorin pre-check + Cholesky solve |
+| 2a | CGT Update | §5.1 | Classical σ adaptation |
+| 2b | Interpolation Update | §5.2 | Lipschitz-enhanced σ adaptation |
+| 3 | ARCm | §6 | Momentum acceleration |
+| 4 | SR1 Update | §7 | Quasi-Newton with safeguards |
+| 5 | Modified Cholesky Solver | §8 | Cubic subproblem via LDL + λ iteration |
+| 6a | Stagnation Recovery | §9.1 | Detect/recover from stagnation |
+| 6b | NaN/Inf Protection | §9.2 | Handle numerical failures |
+| 7a | Box Step Truncation | §10.1 | Apply bounds to step |
+| 7b | Initial Point Projection | §10.1 | Validate starting point |
+| 8a | Null Space Basis | §10.2 | Compute Z for linear equality |
+| 8b | Space Transforms | §10.2 | Convert between x and z spaces |
+| 8c | Constraint Projection | §10.2 | Project to feasible manifold |
+
+## Computational Complexity
+
+The table below shows per-call complexity. For the main loop (Algorithm 1), multiply by number of iterations K.
+
+| Algorithm | Operations | f calls | g calls | H calls | Frequency | C++ Benefit |
+|-----------|------------|---------|---------|---------|-----------|-------------|
+| 0 | O(n) | 0 | 0 | 0 | 1/iter | Low (vectorized) |
+| 1 | *orchestration* | 1-2 | 1 | 0-1 | — | Low |
+| 1a | **O(n³)** | 1 | 0 | 0 | 0-1/iter | **Medium** (Gershgorin loop) |
+| 2a | O(1) | 0 | 0 | 0 | 1/iter | None |
+| 2b | O(1) | 0 | 0 | 0 | 1/iter | None |
+| 3 | O(n) | 0 | 1 | 0 | 1/iter | Low |
+| 4 | O(n²) | 0 | 0 | 0 | 1/iter | Low (BLAS) |
+| 5 | **O(n³)×L** | 0 | 0 | 0 | 0-1/iter | Low (LAPACK ldl/chol) |
+| 6a | O(1) | 0 | 0 | 0 | 1/iter | None |
+| 6b | O(n³)×R | R | R | 0 | rare | Low |
+| 7a | O(n) | 0 | 0 | 0 | 1/iter | **Medium** (tight loop) |
+| 7b | O(n) | 0 | 0 | 0 | once | Low |
+| 8a | O(n³) | 0 | 0 | 0 | once | Low (LAPACK QR) |
+| 8b | O(n·d) | 0 | 0 | 0 | 2/iter | Low (BLAS) |
+| 8c | O(m³) | 0 | 0 | 0 | rare | Low (LAPACK) |
+
+**Legend:**
+
+- **L** = λ iterations in Cholesky solver (typically 3-10)
+- **R** = NaN retries (typically 0-3)
+- **d** = n - rank(A), reduced dimension for linear equality constraints
+- **m** = number of linear equality constraints
+- **f/g/H calls** = calls to user-provided objective, gradient, Hessian functions
+
+**C++ Benefit Assessment:**
+
+| Rating | Meaning | Examples |
+|--------|---------|----------|
+| **None** | O(1) operations, no loops | 2a, 2b, 6a |
+| **Low** | Already uses BLAS/LAPACK or simple vectorized ops | 0, 3, 4, 5, 8a-c |
+| **Medium** | Tight loops over n elements, not BLAS-able | 1a (Gershgorin), 7a (bounds) |
+| **High** | Would require many R iterations | *None in current design* |
+
+**Key Insight**: The expensive O(n³) operations (LDL/Cholesky in 5, QR in 8a) already call LAPACK through R's `fastmatrix::ldl()`, `chol()`, and `qr()` functions. C++ would not significantly improve these.
+
+**Where C++ helps most:**
+
+1. **Gershgorin bound (Algorithm 1a)**: O(n²/2) loop over matrix elements
+2. **Box constraint truncation (Algorithm 7a)**: O(n) loop with conditionals
+
+These are candidates for Rcpp if profiling shows them as bottlenecks.
+
+## Notation
+
+| Symbol | Meaning |
+|--------|---------|
+| $x_k \in \mathbb{R}^n$ | Current iterate |
+| $f_k = f(x_k)$ | Function value |
+| $g_k = \nabla f(x_k)$ | Gradient |
+| $H_k = \nabla^2 f(x_k)$ | Hessian (or approximation $B_k$) |
+| $\sigma_k > 0$ | Regularization parameter |
+| $s_k$ | Step (search direction) |
+| $\rho_k$ | Ratio of actual to predicted reduction |
+| $\lambda$ | Cubic subproblem multiplier ($\lambda = \sigma\|s\|$) |
+| $m_k(s)$ | Cubic model: $f_k + g_k^T s + \frac{1}{2} s^T H_k s + \frac{\sigma_k}{3}\|s\|^3$ |
+
+## Execution Flow Summary
+
+1. **Initialize**: Set $x_0$, $\sigma_0$; handle constraints if present
+2. **Evaluate**: Compute $f_k$, $g_k$, $H_k$ (skip if previous step rejected)
+3. **Check convergence**: 6 criteria (gradient, objective change, parameter change)
+4. **Compute step**:
+   - If analytic/FD Hessian: try Newton first (Gershgorin → Cholesky → Armijo)
+   - If Newton fails or quasi-Newton: solve cubic subproblem
+5. **Evaluate step**: Compute $\rho_k$; accept if $\rho_k \geq \eta_1$
+6. **Update**: Adjust $\sigma_k$; apply momentum/SR1 if enabled; check safeguards
+7. **Repeat** until converged
+
+## Theoretical Guarantees
+
+Unlike line search methods (which use Wolfe conditions), ARC convergence relies on the **ratio test** and **regularization bounds**. The following conditions must hold for the theoretical complexity guarantees of Cartis, Gould, and Toint (2011).
+
+### Required Assumptions
+
+| Assumption | Mathematical Statement | Practical Check |
+|------------|------------------------|-----------------|
+| **A1**: Bounded below | $f(x) \geq f_{\text{low}}$ for all $x$ | Monitor $f_k$; warn if approaching machine limits |
+| **A2**: Smooth objective | $f \in C^2$ (twice continuously differentiable) | User responsibility; check for NaN/Inf in $g$, $H$ |
+| **A3**: Lipschitz Hessian | $\|\nabla^2 f(x) - \nabla^2 f(y)\| \leq L_H \|x - y\|$ | Cannot verify directly; assume holds |
+| **A4**: Bounded $\sigma$ | $0 < \sigma_{\min} \leq \sigma_k \leq \sigma_{\max} < \infty$ | Enforced by Algorithm 2a/2b |
+| **A5**: Subproblem accuracy | $s_k$ is an approximate global minimizer of $m_k(s)$ | Ensured by Algorithms 5a/5b |
+
+### Guaranteed Complexity (Cartis-Gould-Toint 2011)
+
+Under assumptions A1-A5:
+
+| Target | Iterations to Achieve | Meaning |
+|--------|----------------------|---------|
+| $\|\nabla f(x_k)\| \leq \epsilon$ | $O(\epsilon^{-3/2})$ | First-order criticality |
+| $\|\nabla f(x_k)\| \leq \epsilon$ and $\nabla^2 f(x_k) \succeq -\epsilon I$ | $O(\epsilon^{-3})$ | Second-order criticality |
+
+This improves on trust-region/line-search methods which require $O(\epsilon^{-2})$ for first-order.
+
+### Runtime Monitoring
+
+The optimizer tracks these conditions at runtime and issues warnings when violations are detected. See **Algorithm 1, Step 9** for implementation details.
+
+**Monitored conditions:**
+
+- **Boundedness**: Warn if $f_k$ approaches machine limits
+- **Smoothness**: Warn if NaN/Inf detected in derivatives
+- **Ratio health**: Warn on repeated $\rho_k < 0$ (indicates model quality degradation)
+- **Sigma saturation**: Warn if $\sigma_k = \sigma_{\max}$ but steps still rejected
+- **Step quality**: Error if predicted reduction $\leq 0$ (subproblem solver failure)
+
+### Comparison with Wolfe Conditions
+
+| Aspect | Line Search (Wolfe) | ARC (Ratio Test) |
+|--------|---------------------|------------------|
+| **Sufficient decrease** | $f(x_k + \alpha s) \leq f_k + c_1 \alpha g_k^T s$ | $\rho_k = \frac{f_k - f_{k+1}}{m_k(0) - m_k(s_k)} \geq \eta_1$ |
+| **Curvature condition** | $g(x_k + \alpha s)^T s \geq c_2 g_k^T s$ | *Not needed*: cubic term handles curvature |
+| **Step length** | Found by line search ($\alpha$) | Implicit in $\sigma$: larger $\sigma$ → shorter step |
+| **Guarantees** | Global convergence | Global convergence + complexity bounds |
+| **Parameters** | $c_1 \in (0, 1)$, $c_2 \in (c_1, 1)$ | $\eta_1 \in (0, 1)$, $\eta_2 \in (\eta_1, 1)$ |
+
+**Key difference**: Wolfe conditions constrain the *step length* $\alpha$; ARC constrains the *model fidelity* via $\rho_k$. The regularization parameter $\sigma_k$ implicitly controls step size through the cubic term $\frac{\sigma}{3}\|s\|^3$.
+
+# Diagnostics and Output
+
+The optimizer provides two mechanisms for monitoring and debugging: **refresh** controls console output during optimization, and **trace** controls what diagnostic information is stored for post-hoc analysis.
+
+## Refresh (Console Output)
+
+Following Stan's convention, `refresh` controls how often iteration summaries are printed:
+
+| `refresh` | Behavior |
+|-----------|----------|
+| 0 | Silent (no output) |
+| 1 | Print every iteration |
+| N | Print every N iterations |
+
+**Output format:**
+
+```
+iter      f(x)        ||g||_inf      σ          step_type    time
+   1   1.234e+02      5.67e-01   1.00e+00       newton      0.01s
+   2   8.901e+01      3.21e-02   5.00e-01       cubic       0.02s
+  10   2.345e-03      1.23e-06   1.25e-01       newton      0.01s
+```
+
+## Trace (Diagnostic Storage)
+
+The `trace` parameter controls what information is stored per iteration for post-hoc analysis:
+
+| Level | Stored | Memory |
+|-------|--------|--------|
+| 0 | Nothing (only final result) | O(n) |
+| 1 | `f_k`, `||g_k||`, `converge_reason` | O(K) |
+| 2 | + `σ_k`, `ρ_k`, `step_type`, `solver_used`, `iter_time` | O(K) |
+| 3 | + `x_k`, `s_k`, `H_k`, all convergence criteria, SR1 diagnostics, `β_k` | O(Kn²) |
+
+where K = number of iterations.
+
+**Return structure** (when `trace ≥ 1`):
+
+```r
+result$trace <- list(
+  # Level 1
+  f = numeric(K),           # Function values
+  g_norm = numeric(K),      # Gradient norms (infinity)
+  converge_reason = character(K),  # Which criterion checked
+
+
+  # Level 2 (additional)
+  sigma = numeric(K),       # Regularization parameter
+  rho = numeric(K),         # Actual/predicted reduction ratio
+  step_type = character(K), # "newton", "cubic"
+  lambda = numeric(K),      # Cubic subproblem multiplier (λ = σ||s||)
+  time = numeric(K),        # Wall-clock seconds per iteration
+
+  # Level 3 (additional)
+  x = matrix(K, n),         # Iterates (K × n)
+  s = matrix(K, n),         # Steps (K × n)
+  H = array(K, n, n),       # Hessians (K × n × n)
+  converge_criteria = list(...),  # All 6 convergence values per iteration
+  sr1_skip_count = integer(K),    # SR1 skipped updates (if using SR1)
+  beta = numeric(K)         # Momentum parameter (if using momentum)
+)
+```
+
+**Default Parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `refresh` | 10 | Print every 10 iterations (0 = silent) |
+| `trace` | 1 | Store basic diagnostics |
+
+# Convergence Checking
+
+The optimizer uses multiple convergence criteria following Stan's L-BFGS implementation. Termination occurs when **any** criterion is satisfied. This multi-criteria approach prevents premature termination on ill-scaled problems while ensuring robust detection of true convergence.
+
+*Cross-reference: See literature-review.qmd Section 5 (Safeguarding) for discussion of convergence tolerances and stagnation detection.*
+
+## Algorithm 0: Convergence Check (Stan-style)
+
+```
+ALGORITHM 0: Convergence Check
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  g_k             Current gradient
+  f_k, f_{k-1}    Current and previous function values
+  x_k, x_{k-1}    Current and previous iterates
+  tol_grad        Absolute gradient tolerance
+  tol_rel_grad    Relative gradient tolerance
+  tol_obj         Absolute objective change tolerance
+  tol_rel_obj     Relative objective change tolerance
+  tol_param       Parameter change tolerance
+  k               Iteration count
+  max_iter        Maximum iterations
+
+OUTPUT:
+  converged       TRUE if any criterion satisfied
+  reason          String describing which criterion triggered
+
+PROCEDURE:
+  1. CHECK ITERATION LIMIT:
+     IF k ≥ max_iter THEN
+       RETURN (TRUE, "max_iter")
+     END IF
+
+  2. CHECK GRADIENT NORM (absolute):
+     IF ||g_k||_∞ < tol_grad THEN
+       RETURN (TRUE, "gradient_abs")
+     END IF
+
+  3. CHECK GRADIENT NORM (relative):
+     IF ||g_k||_∞ < tol_rel_grad × max(1, |f_k|) THEN
+       RETURN (TRUE, "gradient_rel")
+     END IF
+
+  4. CHECK OBJECTIVE CHANGE (absolute):
+     IF k > 0 AND |f_k - f_{k-1}| < tol_obj THEN
+       RETURN (TRUE, "objective_abs")
+     END IF
+
+  5. CHECK OBJECTIVE CHANGE (relative):
+     IF k > 0 AND |f_k - f_{k-1}| < tol_rel_obj × max(1, |f_k|) THEN
+       RETURN (TRUE, "objective_rel")
+     END IF
+
+  6. CHECK PARAMETER CHANGE:
+     IF k > 0 AND ||x_k - x_{k-1}||_∞ < tol_param THEN
+       RETURN (TRUE, "parameter")
+     END IF
+
+  RETURN (FALSE, "")
+```
+
+**Default Parameters** (following Stan):
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `tol_grad` | $10^{-8}$ | Absolute gradient tolerance |
+| `tol_rel_grad` | $10^{7}$ | Relative gradient tolerance |
+| `tol_obj` | $10^{-12}$ | Absolute objective change tolerance |
+| `tol_rel_obj` | $10^{4}$ | Relative objective change tolerance |
+| `tol_param` | $10^{-8}$ | Parameter change tolerance |
+| `max_iter` | 1000 | Maximum iterations |
+
+# Core ARC Algorithm
+
+The main optimization loop attempts a Newton step first when conditions are favorable, falling back to cubic regularization when needed. This hybrid approach combines Newton's fast local convergence with ARC's robustness to indefinite Hessians.
+
+*Cross-reference: See literature-review.qmd Section 1 (Introduction) for motivation of the cubic model, and Section 2 for regularization parameter adaptation strategies.*
+
+## Algorithm 1: ARC with Newton-First Strategy
+
+```
+ALGORITHM 1: ARC with Newton-First Strategy
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  x_0           Initial point
+  σ_0           Initial regularization parameter
+  hess_method   Hessian source: "analytic", "fd", "sr1", or "bfgs"
+  η_1, η_2      Acceptance thresholds
+  γ             Multiplicative update factor
+  σ_min, σ_max  Regularization bounds
+  c_armijo      Armijo sufficient decrease parameter (e.g., 1e-4)
+  fnscale       Objective scaling (1 = minimize, -1 = maximize)
+  tol_lambda    Cubic solver λ tolerance (e.g., 1e-10)
+  max_iter_lambda  Cubic solver max iterations (e.g., 100)
+  refresh       Print frequency (0 = silent, N = every N iterations)
+  trace         Diagnostic level (0-3)
+
+OUTPUT:
+  x*            Approximate minimizer (or maximizer if fnscale = -1)
+  f*            Function value at x* (original scale)
+  g*            Gradient at x* (original scale)
+  H*            Hessian at x* (original scale, or B* if quasi-Newton)
+  converge_info Convergence status and reason
+  trace_data    Diagnostic history (if trace ≥ 1)
+
+PROCEDURE:
+  [WRAPPER: Apply fnscale for maximization support]
+  IF fnscale ≠ 1 THEN
+    f_orig ← f
+    g_orig ← g
+    H_orig ← H
+    f ← λx. fnscale × f_orig(x)
+    g ← λx. fnscale × g_orig(x)
+    H ← λx. fnscale × H_orig(x)
+  END IF
+
+  k ← 0
+  is_qn ← (hess_method ∈ {"sr1", "bfgs"})
+  prev_rejected ← FALSE              [track if previous step was rejected]
+  consecutive_negative_rho ← 0       [for monitoring theoretical guarantees]
+  IF trace ≥ 1 THEN initialize_trace_storage() END IF
+
+  WHILE NOT converged DO
+    iter_start_time ← clock()
+
+    1. EVALUATE (skip if previous step was rejected):
+       IF NOT prev_rejected THEN
+         f_k ← f(x_k)
+         g_k ← ∇f(x_k)
+         H_k ← get_hessian(x_k, hess_method)    [or B_k if quasi-Newton]
+       END IF
+       [If prev_rejected: f_k, g_k, H_k unchanged from previous iteration]
+
+    2. CHECK CONVERGENCE:
+       (converged, reason) ← convergence_check(...)    [Algorithm 0]
+       IF converged THEN BREAK END IF
+
+    3. ATTEMPT NEWTON STEP (skip if rejected or quasi-Newton):
+       step_type ← "cubic"    [default]
+       IF NOT prev_rejected AND NOT is_qn THEN
+         newton_success ← try_newton_step(g_k, H_k, x_k, f_k, c_armijo)
+         IF newton_success THEN
+           x_{k+1} ← x_k + s_newton
+           s_k ← s_newton
+           σ_{k+1} ← max(σ_k / γ, σ_min)    [successful: decrease σ]
+           ρ_k ← NA    [not computed for Newton]
+           step_type ← "newton"
+           prev_rejected ← FALSE
+           GOTO STEP 9    [skip cubic machinery]
+         END IF
+       END IF
+       [If prev_rejected: Newton already failed with this H_k, skip]
+
+    4. CUBIC SUBPROBLEM (Newton failed, rejected, or quasi-Newton):
+       (s_k, λ_k) ← solve_cubic_modified_cholesky(g_k, H_k, σ_k, tol_lambda, max_iter_lambda)
+       [Algorithm 5; handles both PD and indefinite H via mchol]
+
+    5. EVALUATE TRIAL POINT:
+       x_trial ← x_k + s_k
+       f_trial ← f(x_trial)
+
+    6. COMPUTE RATIO:
+       pred_reduction ← m_k(0) - m_k(s_k)
+       IF pred_reduction ≤ 0 THEN
+         ERROR("Cubic subproblem solver failed: predicted reduction non-positive")
+       END IF
+       actual_reduction ← f_k - f_trial
+       ρ_k ← actual_reduction / pred_reduction
+
+    7. UPDATE ITERATE AND TRACK REJECTION:
+       IF ρ_k ≥ η_1 THEN
+         x_{k+1} ← x_trial    [accept step]
+         prev_rejected ← FALSE
+       ELSE
+         x_{k+1} ← x_k        [reject step]
+         prev_rejected ← TRUE
+         [Next iteration: skip eval, skip Newton, re-solve cubic with larger σ]
+       END IF
+
+    8. UPDATE REGULARIZATION:
+       σ_{k+1} ← update_sigma(σ_k, ρ_k, η_1, η_2, γ, σ_min, σ_max)
+       [Algorithm 2a or 2b]
+
+    9. DIAGNOSTICS AND MONITORING:
+       iter_time ← clock() - iter_start_time
+
+       [MONITORING: Check theoretical guarantee conditions]
+       IF f_k < f_low_warn THEN
+         WARN("Objective approaching lower bound limit")
+       END IF
+
+       IF ρ_k < 0 THEN
+         consecutive_negative_rho ← consecutive_negative_rho + 1
+         IF consecutive_negative_rho > 3 THEN
+           WARN("Repeated ρ < 0: model quality degraded, L_H assumption may be violated")
+         END IF
+       ELSE
+         consecutive_negative_rho ← 0
+       END IF
+
+       IF σ_k = σ_max AND ρ_k < η_1 THEN
+         WARN("σ saturated at maximum but steps still rejected")
+       END IF
+
+       [TRACE: Store iteration data]
+       IF trace ≥ 1 THEN
+         store_trace_level1(k, f_k, ||g_k||_∞, reason)
+       END IF
+       IF trace ≥ 2 THEN
+         store_trace_level2(k, σ_k, ρ_k, step_type, iter_time)
+       END IF
+       IF trace ≥ 3 THEN
+         store_trace_level3(k, x_k, s_k, H_k, converge_criteria, ...)
+       END IF
+
+       [REFRESH: Print progress]
+       IF refresh > 0 AND k MOD refresh = 0 THEN
+         PRINT iter=k, f=f_k, ||g||=||g_k||_∞, σ=σ_k, step=step_type, time=iter_time
+       END IF
+
+    k ← k + 1
+  END WHILE
+
+  [Return original-scale values]
+  IF fnscale ≠ 1 THEN
+    f_k ← f_k / fnscale    [convert back to original scale]
+    g_k ← g_k / fnscale
+    H_k ← H_k / fnscale
+  END IF
+
+  RETURN x_k, f_k, g_k, H_k, converge_info
+```
+
+## Algorithm 1a: Newton Step with Gershgorin Pre-Check
+
+This subroutine attempts a Newton step, using Gershgorin's theorem as a cheap pre-check for positive definiteness before the more expensive Cholesky factorization.
+
+*Cross-reference: See literature-review.qmd Section 5.1 for Gershgorin pre-check discussion.*
+
+```
+ALGORITHM 1a: Try Newton Step
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  g_k         Gradient
+  H_k         Hessian (analytic or FD, NOT quasi-Newton)
+  x_k         Current iterate
+  f_k         Current function value
+  c_armijo    Armijo parameter (e.g., 1e-4)
+
+OUTPUT:
+  success     TRUE if Newton step accepted
+  s_newton    Newton step (if successful)
+
+PROCEDURE:
+  1. GERSHGORIN PRE-CHECK:
+     λ_min_bound ← gershgorin_lower_bound(H_k)    [O(n²)]
+     IF λ_min_bound ≤ 0 THEN
+       RETURN (FALSE, NULL)    [H_k may be indefinite, skip Newton]
+     END IF
+
+  2. ATTEMPT CHOLESKY:
+     (L, chol_success) ← cholesky(H_k)
+     IF NOT chol_success THEN
+       RETURN (FALSE, NULL)    [H_k is indefinite]
+     END IF
+
+  3. SOLVE NEWTON SYSTEM:
+     s_newton ← -L^{-T} L^{-1} g_k    [i.e., s = -H_k^{-1} g_k]
+
+  4. CHECK ARMIJO CONDITION:
+     f_trial ← f(x_k + s_newton)
+     IF f_trial ≤ f_k + c_armijo × g_k^T s_newton THEN
+       RETURN (TRUE, s_newton)    [Newton step accepted]
+     END IF
+
+  RETURN (FALSE, NULL)    [Newton step rejected]
+
+
+FUNCTION gershgorin_lower_bound(H):
+  ─────────────────────────────────────────────────────────────────────
+  [Cheap O(n²/2) lower bound on minimum eigenvalue for symmetric H]
+
+  n ← dim(H)
+  row_sums ← zeros(n)
+
+  [Exploit symmetry: traverse upper triangle only]
+  FOR i = 1 TO n DO
+    FOR j = i+1 TO n DO
+      val ← |H_{ij}|
+      row_sums[i] ← row_sums[i] + val
+      row_sums[j] ← row_sums[j] + val    [H_{ji} = H_{ij}]
+    END FOR
+  END FOR
+
+  [Compute minimum Gershgorin lower bound]
+  min_lower ← +∞
+  FOR i = 1 TO n DO
+    lower_i ← H_{ii} - row_sums[i]
+    min_lower ← min(min_lower, lower_i)
+  END FOR
+
+  RETURN min_lower
+
+  [If min_lower > 0, H is guaranteed positive definite (sufficient but not necessary)]
+```
+
+**Why Newton-First?**
+
+- Newton converges quadratically near solutions; ARC adds overhead when Newton works
+- Gershgorin check is O(n²) vs Cholesky's O(n³) — cheap to try first
+- Only attempt Newton with analytic/FD Hessians; SR1 approximations may be intentionally indefinite
+
+# Regularization Parameter Updates
+
+The regularization parameter $\sigma_k$ controls the trade-off between the quadratic model and the cubic safeguard. These algorithms adapt $\sigma_k$ based on how well the model predicted actual function decrease.
+
+*Cross-reference: See literature-review.qmd Section 2 for detailed comparison of CGT (Option 1) and Interpolation-Enhanced (Option 2) adaptation strategies.*
+
+## Algorithm 2a: Classical CGT Update
+
+The standard parameter update from Cartis, Gould, and Toint (2011). Simple, robust, and theoretically well-understood.
+
+```
+ALGORITHM 2a: Classical CGT Update
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  σ_k         Current regularization parameter
+  ρ_k         Ratio of actual to predicted reduction
+  η_1, η_2    Thresholds (0 < η_1 < η_2 < 1)
+  γ           Multiplicative factor (γ > 1)
+  σ_min       Minimum allowed σ
+  σ_max       Maximum allowed σ
+
+OUTPUT:
+  σ_{k+1}     Updated regularization parameter
+
+PROCEDURE:
+  IF ρ_k ≥ η_2 THEN
+    σ_{k+1} ← max(σ_k / γ, σ_min)     [very successful]
+  ELSE IF ρ_k ≥ η_1 THEN
+    σ_{k+1} ← σ_k                      [successful]
+  ELSE
+    σ_{k+1} ← min(γ · σ_k, σ_max)     [unsuccessful]
+  END IF
+
+  RETURN σ_{k+1}
+```
+
+## Algorithm 2b: Interpolation-Enhanced CGT Update
+
+Variant that estimates local Lipschitz constant from model-function discrepancy (Gould, Porcelli, Toint, 2012). May provide faster adaptation on large-scale problems with varying curvature.
+
+```
+ALGORITHM 2b: Interpolation-Enhanced CGT Update
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  σ_k         Current regularization parameter
+  ρ_k         Ratio of actual to predicted reduction
+  s_k         Current step
+  f(x_k+s_k)  Function value at trial point
+  m_k(s_k)    Model value at step
+  η_1, η_2    Thresholds
+  γ           Multiplicative factor
+  σ_min       Minimum allowed σ
+  σ_max       Maximum allowed σ
+
+OUTPUT:
+  σ_{k+1}     Updated regularization parameter
+
+PROCEDURE:
+  1. ESTIMATE LOCAL LIPSCHITZ CONSTANT:
+     L̂_k ← 2 |f(x_k + s_k) - m_k(s_k)| / ||s_k||³
+
+  2. UPDATE WITH INTERPOLATION:
+     IF ρ_k ≥ η_2 THEN
+       σ_{k+1} ← max(L̂_k / 2, σ_k / γ, σ_min)     [very successful]
+     ELSE IF ρ_k ≥ η_1 THEN
+       σ_{k+1} ← σ_k                               [successful]
+     ELSE
+       σ_{k+1} ← max(L̂_k / 2, γ · σ_k)            [unsuccessful]
+       σ_{k+1} ← min(σ_{k+1}, σ_max)
+     END IF
+
+  RETURN σ_{k+1}
+```
+
+**Default Parameters**:
+
+| Parameter | Default | Valid Range | Description |
+|-----------|---------|-------------|-------------|
+| `sigma_init` | 1.0 | $(0, \infty)$ | Initial $\sigma_0$ |
+| `eta_1` | 0.1 | $(0, \eta_2)$ | Acceptance threshold |
+| `eta_2` | 0.9 | $(\eta_1, 1)$ | Very successful threshold |
+| `gamma` | 2.0 | $(1, \infty)$ | Multiplicative factor |
+| `sigma_min` | $10^{-12}$ | $(0, \sigma_0)$ | Lower bound |
+| `sigma_max` | $10^{12}$ | $(\sigma_0, \infty)$ | Upper bound |
+
+# Momentum Acceleration
+
+Momentum acceleration can reduce iteration counts by 30-90% without additional function evaluations. The adaptive momentum parameter ensures stability by vanishing near convergence.
+
+*Cross-reference: See literature-review.qmd Section 4 for theoretical background on momentum with cubic regularization (CRm, ARCm variants) and complexity analysis.*
+
+## Algorithm 3: ARCm (Momentum-Accelerated ARC)
+
+```
+ALGORITHM 3: ARCm (Momentum-Accelerated ARC)
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  x_0           Initial point
+  σ_0           Initial regularization
+  β_max         Maximum momentum parameter
+  c_1, c_2      Momentum scaling constants
+  [Standard ARC parameters: η_1, η_2, γ, σ_min, σ_max]
+
+OUTPUT:
+  x*            Approximate minimizer
+
+PROCEDURE:
+  k ← 0
+  y_0 ← x_0
+
+  WHILE NOT converged DO    [see Algorithm 0]
+
+    1. EVALUATE at x_k:
+       f_k ← f(x_k), g_k ← ∇f(x_k), H_k ← ∇²f(x_k)
+
+    2. SOLVE CUBIC SUBPROBLEM:
+       s_k ← argmin_s m_k(s)
+
+    3. SET TRIAL POINT:
+       y_{k+1} ← x_k + s_k
+
+    4. COMPUTE ρ_k AND UPDATE σ_k:
+       [Standard CGT update - see Algorithm 2a]
+
+    5. APPLY MOMENTUM (if step accepted):
+       IF ρ_k ≥ η_1 THEN
+         β_k ← min(β_max, c_1/||s_k||, c_2/||g(y_{k+1})||)
+         x_{k+1} ← y_{k+1} + β_k · (y_{k+1} - y_k)
+       ELSE
+         x_{k+1} ← x_k          [no momentum on rejected steps]
+         y_{k+1} ← y_k
+       END IF
+
+    k ← k + 1
+  END WHILE
+
+  RETURN x_k
+```
+
+**Momentum Parameters**:
+
+| Parameter | Default | Valid Range | Description |
+|-----------|---------|-------------|-------------|
+| `momentum_max` | 0.9 | $(0, 1)$ | Maximum $\beta_k$ |
+| `momentum_c1` | 0.1 | $(0, \infty)$ | Step-size scaling |
+| `momentum_c2` | 0.1 | $(0, \infty)$ | Gradient scaling |
+
+# Quasi-Newton Updates
+
+When analytic Hessians are unavailable and finite differences are too expensive, quasi-Newton approximations provide an alternative. SR1 is preferred over BFGS with ARC because it can represent indefinite curvature.
+
+*Cross-reference: See literature-review.qmd Section 3 for comparison of SR1 vs BFGS, and Section 3.3 for SR1 safeguarding strategies (skip rule, restart, modified variants).*
+
+## Algorithm 4: SR1 Update with Safeguards
+
+```
+ALGORITHM 4: SR1 Update with Safeguards
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  B_k         Current Hessian approximation
+  s_k         Step taken: s_k = x_{k+1} - x_k
+  y_k         Gradient difference: y_k = g_{k+1} - g_k
+  τ           Skip threshold (e.g., 10⁻⁸ to 10⁻⁴)
+  N_skip      Maximum consecutive skips before restart
+  skip_count  Counter of consecutive skipped updates
+
+OUTPUT:
+  B_{k+1}     Updated Hessian approximation
+  skip_count  Updated skip counter
+
+PROCEDURE:
+  1. COMPUTE UPDATE VECTORS:
+     r_k ← y_k - B_k s_k
+     denom ← r_k^T s_k
+
+  2. CHECK SKIP CONDITION:
+     IF |denom| < τ · ||r_k|| · ||s_k|| THEN
+       B_{k+1} ← B_k                    [skip update]
+       skip_count ← skip_count + 1
+     ELSE
+       B_{k+1} ← B_k + (r_k r_k^T) / denom    [apply SR1]
+       skip_count ← 0
+     END IF
+
+  3. CHECK FOR RESTART:
+     IF skip_count ≥ N_skip THEN
+       α ← y_k^T s_k / (s_k^T s_k)      [Barzilai-Borwein scaling]
+       IF α ≤ 0 THEN α ← 1 END IF
+       B_{k+1} ← α · I                   [restart with scaled identity]
+       skip_count ← 0
+     END IF
+
+  RETURN B_{k+1}, skip_count
+```
+
+**SR1 Safeguard Parameters**:
+
+| Parameter | Default | Valid Range | Description |
+|-----------|---------|-------------|-------------|
+| `sr1_skip_tol` | $10^{-6}$ | $(10^{-8}, 10^{-4})$ | Denominator threshold $\tau$ |
+| `sr1_restart_after` | 5 | $\{3, 4, 5, ...\}$ | Restarts after N skips |
+| `sr1_init_scale` | "bb" | "bb", "identity" | Restart scaling method |
+
+**Why SR1 with ARC**:
+
+- SR1 can represent indefinite Hessians (negative eigenvalues)
+- ARC handles indefinite curvature naturally via cubic regularization
+- BFGS forces positive definiteness, wasting ARC's saddle-escape capability
+
+# Cubic Subproblem Solver
+
+The cubic subproblem $\min_s m_k(s)$ is the computational core of ARC. We use LDL factorization (`fastmatrix::ldl`) to estimate the minimum eigenvalue shift needed, then iterate on the secular equation to find the optimal regularization multiplier.
+
+*Cross-reference: See literature-review.qmd Section 5.2 for handling indefinite Hessians.*
+
+## Algorithm 5: Modified Cholesky Cubic Solver
+
+The key insight is that LDL decomposition gives diagonal elements that approximate eigenvalue information. When any diagonal element is negative, the matrix is indefinite. The minimum diagonal gives a lower bound on the shift needed.
+
+```
+ALGORITHM 5: Modified Cholesky Cubic Solver
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  g           Gradient
+  H           Hessian (may be positive definite or indefinite)
+  σ           Regularization parameter
+  tol_lambda  Convergence tolerance for λ iteration (e.g., 1e-10)
+  max_iter    Maximum λ iterations (e.g., 50)
+  max_chol_retries  Maximum Cholesky retry attempts (e.g., 5)
+
+OUTPUT:
+  s           Solution to cubic subproblem
+  λ           Final regularization multiplier
+  converged   TRUE if secular equation converged
+
+PROCEDURE:
+  0. HANDLE ZERO GRADIENT (early return):
+     IF ||g|| < machine_epsilon THEN
+       RETURN (s = 0, λ = 0, converged = TRUE)
+     END IF
+
+  1. LDL FACTORIZATION FOR SHIFT ESTIMATION:
+     (L, D, _) ← ldl(H)
+     [H = L D L^T where D is diagonal]
+     λ_lower ← max(0, -min(diag(D)))
+     [If min(D) < 0, H is indefinite and needs shift ≥ |min(D)|]
+
+  2. COMPUTE INITIAL SHIFT WITH ROBUST BUFFER:
+     sqrt_eps ← sqrt(machine_epsilon)    [≈ 1.49e-8]
+     ε ← max(sqrt_eps, sqrt_eps × λ_lower)
+     λ ← λ_lower + ε
+     [Buffer ensures H + λI is strictly PD, not just semi-definite]
+
+  3. INITIAL CHOLESKY WITH RETRY:
+     L_λ ← NULL
+     FOR attempt = 1 TO max_chol_retries DO
+       L_λ ← TRY chol(H + λ I)
+       IF L_λ succeeded THEN BREAK END IF
+       λ ← λ × 2    [double shift and retry]
+     END FOR
+     IF L_λ = NULL THEN
+       ERROR("Failed to compute Cholesky factorization")
+     END IF
+
+  4. INITIAL SOLVE:
+     s ← -L_λ^{-T} L_λ^{-1} g    [forward/backward substitution]
+
+  5. ITERATE (secular equation):
+     converged ← FALSE
+     FOR iter = 1 TO max_iter DO
+       [Secular equation: find λ such that ||s(λ)|| = λ/σ]
+       φ ← ||s|| - λ/σ
+
+       IF |φ| < tol_lambda × max(1, λ/σ) THEN
+         converged ← TRUE
+         BREAK
+       END IF
+
+       [Newton update on secular equation]
+       [φ'(λ) = -s^T (H + λI)^{-1} s / ||s|| - 1/σ]
+       w ← L_λ^{-T} s             [solve L_λ^T w = s]
+       φ_prime ← -||w||² / ||s|| - 1/σ
+
+       λ_new ← λ - φ / φ_prime
+       λ_new ← max(λ_new, λ_lower)    [stay in valid region]
+
+       [Recompute L and s for new λ with retry on failure]
+       chol_success ← FALSE
+       FOR chol_attempt = 1 TO max_chol_retries DO
+         L_new ← TRY chol(H + λ_new I)
+         IF L_new succeeded THEN
+           L_λ ← L_new
+           chol_success ← TRUE
+           BREAK
+         END IF
+         λ_new ← λ_new × 2    [double shift and retry]
+       END FOR
+       IF NOT chol_success THEN
+         BREAK    [use current solution]
+       END IF
+
+       s ← -L_λ^{-T} L_λ^{-1} g
+       λ ← λ_new
+     END FOR
+
+  6. COMPUTE PREDICTED REDUCTION:
+     pred_reduction ← -g^T s - ½ s^T H s - (σ/3) ||s||³
+
+  RETURN (s, λ, pred_reduction, converged)
+
+NOTES:
+  - LDL is called once at O(n³); each λ iteration is also O(n³)
+  - Typically converges in 3-10 iterations
+  - Zero gradient returns immediately (optimal step is s = 0)
+  - Retry logic handles edge cases where initial shift is insufficient
+  - sqrt(machine_epsilon) buffer prevents near-singular regularized Hessians
+```
+
+## The Secular Equation
+
+The secular equation $\phi(\lambda) = 0$ arises from the optimality condition. Geometrically, it finds where the regularized Newton step has the right norm:
+
+$$\phi(\lambda) = \|s(\lambda)\| - \frac{\lambda}{\sigma} = 0$$
+
+where $s(\lambda) = -(H + \lambda I)^{-1}g$.
+
+**Properties:**
+- $\phi(\lambda) \to +\infty$ as $\lambda \to -\lambda_{\min}^+$ (smallest eigenvalue)
+- $\phi(\lambda) \to -\infty$ as $\lambda \to +\infty$
+- $\phi$ is strictly decreasing for $\lambda > -\lambda_{\min}$
+- Unique root exists in $(\max(0, -\lambda_{\min}), +\infty)$
+
+**LDL advantage:** Instead of computing eigenvalues to find $\lambda_{\min}$, we use LDL decomposition which gives diagonal elements approximating eigenvalue information. The lower bound $\lambda_{\text{lower}} = \max(0, -\min(D))$ ensures we start with a shift large enough to make the regularized Hessian positive definite.
+
+# Robustness Safeguards
+
+These algorithms detect and recover from numerical pathologies that could cause optimizer failure.
+
+*Cross-reference: See literature-review.qmd Section 5 for comprehensive coverage of safeguarding strategies including stagnation detection, NaN/Inf handling, and indefiniteness detection.*
+
+## Algorithm 6a: Stagnation Detection and Recovery
+
+```
+ALGORITHM 6a: Stagnation Detection and Recovery
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  step_history      Recent ||s_k|| values (ring buffer)
+  f_history         Recent f_k values (ring buffer)
+  tol_step          Step size tolerance
+  tol_f             Function change tolerance
+  max_stagnant      Maximum stagnant iterations before action
+  is_qn             TRUE if using quasi-Newton
+
+OUTPUT:
+  action            "continue", "refresh_hessian", or "stop"
+
+PROCEDURE:
+  1. CHECK STEP SIZE STAGNATION:
+     stagnant_steps ← count consecutive ||s_k|| < tol_step
+
+  2. CHECK FUNCTION STAGNATION:
+     stagnant_f ← count consecutive |f_{k-1} - f_k| < tol_f
+
+  3. DETERMINE ACTION:
+     IF stagnant_steps ≥ max_stagnant OR stagnant_f ≥ max_stagnant THEN
+       IF is_qn AND NOT already_refreshed THEN
+         RETURN "refresh_hessian"    [try FD Hessian refresh]
+       ELSE
+         RETURN "stop"               [declare stagnation]
+       END IF
+     END IF
+
+     RETURN "continue"
+```
+
+## Algorithm 6b: NaN/Inf Protection
+
+```
+ALGORITHM 6b: NaN/Inf Protection
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  x_trial           Trial point x_k + s_k
+  max_nan_retries   Maximum retry attempts
+  nan_sigma_factor  σ multiplier on NaN (e.g., 10)
+
+OUTPUT:
+  x_{k+1}           Next iterate (or stop signal)
+  σ_{k+1}           Updated regularization
+
+PROCEDURE:
+  retry_count ← 0
+
+  WHILE retry_count < max_nan_retries DO
+    1. EVALUATE at trial point:
+       f_trial ← f(x_trial)
+       g_trial ← ∇f(x_trial)
+
+    2. CHECK for NaN/Inf:
+       IF is_finite(f_trial) AND is_finite(g_trial) THEN
+         RETURN (x_trial, σ_k, "success")
+       END IF
+
+    3. HANDLE failure:
+       σ_k ← σ_k × nan_sigma_factor    [increase regularization]
+       s_k ← re-solve_cubic(σ_k)       [smaller step]
+       x_trial ← x_k + s_k
+       retry_count ← retry_count + 1
+  END WHILE
+
+  RETURN (x_k, σ_k, "numerical_failure")   [stop with error]
+```
+
+# Constraint Handling
+
+arcopt supports two types of constraints: box constraints (simple bounds) and linear equality constraints. Currently these are mutually exclusive—future versions will support both simultaneously.
+
+## Box Constraints
+
+Box constraints restrict parameters to lie within bounds: $\ell \leq x \leq u$ where $\ell, u \in \mathbb{R}^n$ (use $-\infty$ or $+\infty$ for unbounded dimensions).
+
+The approach uses **projected step with truncated line search**: compute the maximum feasible step length, truncate the step, and project the result for numerical safety.
+
+*Cross-reference: See literature-review.qmd for discussion of bound-constrained optimization and active set methods.*
+
+### Algorithm 7a: Apply Box Constraints to Step
+
+```
+ALGORITHM 7a: Apply Box Constraints to Step
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  x_k         Current iterate
+  s_k         Proposed step (unconstrained)
+  lower       Lower bounds ℓ (use -∞ for unbounded)
+  upper       Upper bounds u (use +∞ for unbounded)
+
+OUTPUT:
+  s_bounded   Truncated step that keeps x_k + s within bounds
+  x_new       New iterate projected to feasible region
+
+PROCEDURE:
+  1. COMPUTE MAXIMUM FEASIBLE STEP LENGTH:
+     α_max ← 1.0
+     FOR i = 1 TO n DO
+       IF s_k[i] > 0 AND upper[i] < +∞ THEN
+         α_max ← min(α_max, (upper[i] - x_k[i]) / s_k[i])
+       ELSE IF s_k[i] < 0 AND lower[i] > -∞ THEN
+         α_max ← min(α_max, (lower[i] - x_k[i]) / s_k[i])
+       END IF
+     END FOR
+
+  2. TRUNCATE STEP:
+     s_bounded ← α_max × s_k
+
+  3. PROJECT FOR NUMERICAL SAFETY:
+     x_new ← project_to_box(x_k + s_bounded, lower, upper)
+
+  RETURN s_bounded, x_new
+
+
+FUNCTION project_to_box(x, lower, upper):
+  ─────────────────────────────────────────────────────────────────────
+  FOR i = 1 TO n DO
+    x[i] ← max(lower[i], min(upper[i], x[i]))
+  END FOR
+  RETURN x
+```
+
+### Algorithm 7b: Validate and Project Initial Point
+
+```
+ALGORITHM 7b: Validate and Project Initial Point
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  x_0         User-provided initial point
+  lower       Lower bounds
+  upper       Upper bounds
+  warn        Whether to warn if projection needed
+
+OUTPUT:
+  x_0_proj    Feasible initial point
+
+PROCEDURE:
+  1. VALIDATE BOUNDS:
+     IF any(lower > upper) THEN
+       ERROR("Invalid bounds: lower > upper")
+     END IF
+     IF length(lower) ≠ n OR length(upper) ≠ n THEN
+       ERROR("Bounds dimension mismatch")
+     END IF
+
+  2. CHECK FEASIBILITY:
+     is_feasible ← all(lower ≤ x_0 ≤ upper)
+
+  3. PROJECT IF NEEDED:
+     IF NOT is_feasible THEN
+       IF warn THEN
+         WARN("Initial point infeasible, projecting to bounds")
+       END IF
+       x_0_proj ← project_to_box(x_0, lower, upper)
+     ELSE
+       x_0_proj ← x_0
+     END IF
+
+  RETURN x_0_proj
+```
+
+### Integration with Algorithm 1
+
+In the main ARC loop (Algorithm 1), box constraints are applied at two points:
+
+1. **After computing step** (Steps 3-4): Replace `s_k` with truncated step
+2. **After update** (Step 7): Ensure `x_{k+1}` is projected to feasible region
+
+```
+[In Algorithm 1, after step computation:]
+
+IF bounds provided THEN
+  (s_k, x_trial) ← apply_box_constraints(x_k, s_k, lower, upper)
+END IF
+```
+
+## Linear Equality Constraints
+
+Linear equality constraints have the form $Ax = b$ where $A$ is $m \times n$ with $m < n$ and $\text{rank}(A) = m$.
+
+The approach uses the **null space method**: reparameterize the problem to optimize over a lower-dimensional unconstrained space.
+
+*Cross-reference: See literature-review.qmd for discussion of equality-constrained optimization and null space methods.*
+
+### Algorithm 8a: Compute Null Space Basis
+
+```
+ALGORITHM 8a: Compute Null Space Basis
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  A           Constraint matrix (m × n)
+  b           Right-hand side vector (m × 1)
+
+OUTPUT:
+  x_p         Particular solution satisfying Ax_p = b
+  Z           Null space basis (n × (n-m)) where AZ = 0
+
+PROCEDURE:
+  1. VALIDATE CONSTRAINTS:
+     (m, n) ← dim(A)
+     IF m ≥ n THEN
+       ERROR("Too many constraints: m must be < n")
+     END IF
+     IF rank(A) < m THEN
+       ERROR("Rank-deficient constraint matrix")
+     END IF
+
+  2. COMPUTE QR DECOMPOSITION of A^T:
+     [Q, R] ← qr(A^T)
+     [Q is n × n orthogonal, R is n × m upper triangular]
+
+  3. EXTRACT NULL SPACE BASIS:
+     Z ← Q[:, (m+1):n]    [last (n-m) columns of Q]
+     [Z is n × (n-m), satisfies AZ = 0]
+
+  4. COMPUTE PARTICULAR SOLUTION:
+     x_p ← A^T (A A^T)^{-1} b    [minimum-norm solution]
+     [Or via QR: x_p ← Q[:, 1:m] × solve(R[1:m, :], b)]
+
+  RETURN x_p, Z
+
+NOTES:
+  - Any feasible x can be written as x = x_p + Z z for some z ∈ ℝ^{n-m}
+  - Optimization over z is unconstrained and lower-dimensional
+  - Gradient transforms: ∇_z f = Z^T ∇_x f
+  - Hessian transforms: ∇²_z f = Z^T ∇²_x f Z
+```
+
+### Algorithm 8b: Transform Between Spaces
+
+```
+ALGORITHM 8b: Transform Between x-space and z-space
+─────────────────────────────────────────────────────────────────────
+
+FUNCTION transform_to_z_space(x, x_p, Z):
+  ─────────────────────────────────────────────────────────────────────
+  [Project x onto null space coordinates]
+  z ← Z^T (x - x_p)
+  RETURN z
+
+FUNCTION transform_to_x_space(z, x_p, Z):
+  ─────────────────────────────────────────────────────────────────────
+  [Reconstruct x from null space coordinates]
+  x ← x_p + Z z
+  RETURN x
+
+FUNCTION wrap_objective_for_z_space(fn, x_p, Z):
+  ─────────────────────────────────────────────────────────────────────
+  [Create wrapper that transforms objective and derivatives]
+
+  FUNCTION fn_z(z):
+    x ← x_p + Z z
+    (f, g_x) ← fn(x)
+    g_z ← Z^T g_x    [chain rule]
+    RETURN (f, g_z)
+
+  RETURN fn_z
+
+FUNCTION wrap_hessian_for_z_space(hess_fn, x_p, Z):
+  ─────────────────────────────────────────────────────────────────────
+  [Create wrapper that transforms Hessian]
+
+  FUNCTION hess_z(z):
+    x ← x_p + Z z
+    H_x ← hess_fn(x)
+    H_z ← Z^T H_x Z    [congruence transformation]
+    RETURN H_z
+
+  RETURN hess_z
+```
+
+### Algorithm 8c: Project to Constraint Manifold
+
+```
+ALGORITHM 8c: Project to Constraint Manifold
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  x           Point (possibly infeasible)
+  A           Constraint matrix
+  b           Right-hand side
+
+OUTPUT:
+  x_proj      Closest point satisfying Ax = b
+
+PROCEDURE:
+  1. COMPUTE CONSTRAINT VIOLATION:
+     r ← A x - b
+
+  2. IF ||r|| < tol THEN
+     RETURN x    [already feasible]
+  END IF
+
+  3. PROJECT (minimum-norm correction):
+     x_proj ← x - A^T (A A^T)^{-1} r
+
+  RETURN x_proj
+```
+
+### Integration with Algorithm 1
+
+When linear equality constraints are provided, Algorithm 1 operates in reduced z-space:
+
+```
+[Before main loop:]
+IF eq_constraints provided THEN
+  (x_p, Z) ← compute_null_space_basis(A, b)
+  x_0 ← project_to_constraint_manifold(x_0, A, b)
+  z_0 ← transform_to_z_space(x_0, x_p, Z)
+  fn_z ← wrap_objective_for_z_space(fn, x_p, Z)
+  hess_z ← wrap_hessian_for_z_space(hess, x_p, Z)
+  [Run optimization on fn_z starting from z_0]
+END IF
+
+[After convergence:]
+x* ← transform_to_x_space(z*, x_p, Z)
+```
+
+**Key properties:**
+- Dimension reduced from n to (n - rank(A))
+- All iterates automatically satisfy Ax = b
+- Gradients and Hessians transformed via chain rule
+- Return value includes `reduced_dimension` and `constraint_satisfied` fields
+
+### Constraint Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `bounds$lower` | NULL | Lower bounds vector (use -Inf for unbounded) |
+| `bounds$upper` | NULL | Upper bounds vector (use +Inf for unbounded) |
+| `eq_constraints$A` | NULL | Constraint matrix (m × n) |
+| `eq_constraints$b` | NULL | Right-hand side vector |
+| `constraint_tol` | $10^{-10}$ | Tolerance for constraint satisfaction |
+
+### Current Limitations
+
+- **Phase 1**: Either bounds OR eq_constraints, not both simultaneously
+- Combined box + linear equality constraints planned for future release
+- Nonlinear constraints not yet supported
+
+# Complete Parameter Reference
+
+## All Control Parameters
+
+| Parameter | Default | Algorithm | Description |
+|-----------|---------|-----------|-------------|
+| **Objective Scaling** ||||
+| `fnscale` | 1 | Core ARC | Scaling factor (1 = minimize, -1 = maximize) |
+| **Diagnostics** ||||
+| `refresh` | 10 | Output | Print frequency (0 = silent) |
+| `trace` | 1 | Output | Diagnostic storage level (0-3) |
+| **Convergence (Stan-style)** ||||
+| `tol_grad` | $10^{-8}$ | Convergence | Absolute gradient tolerance |
+| `tol_rel_grad` | $10^{7}$ | Convergence | Relative gradient tolerance |
+| `tol_obj` | $10^{-12}$ | Convergence | Absolute objective change |
+| `tol_rel_obj` | $10^{4}$ | Convergence | Relative objective change |
+| `tol_param` | $10^{-8}$ | Convergence | Parameter change tolerance |
+| `max_iter` | 1000 | Convergence | Maximum iterations |
+| **Regularization** ||||
+| `sigma_init` | 1.0 | Core ARC | Initial $\sigma_0$ |
+| `eta_1` | 0.1 | Core ARC | Acceptance threshold |
+| `eta_2` | 0.9 | Core ARC | Very successful threshold |
+| `gamma` | 2.0 | Core ARC | Update factor |
+| `sigma_min` | $10^{-12}$ | Core ARC | Lower bound |
+| `sigma_max` | $10^{12}$ | Core ARC | Upper bound |
+| `use_interpolation` | FALSE | CGT | Enable interpolation variant |
+| **Cubic Solver** ||||
+| `tol_lambda` | $10^{-10}$ | Algorithm 5 | λ iteration convergence tolerance |
+| `max_iter_lambda` | 100 | Algorithm 5 | Maximum λ iterations |
+| **Newton Step** ||||
+| `try_newton` | TRUE | Core ARC | Attempt Newton before cubic |
+| `c_armijo` | $10^{-4}$ | Newton | Armijo sufficient decrease |
+| **Momentum** ||||
+| `use_momentum` | FALSE | ARCm | Enable momentum |
+| `momentum_max` | 0.9 | ARCm | Maximum $\beta$ |
+| `momentum_c1` | 0.1 | ARCm | Step scaling constant |
+| `momentum_c2` | 0.1 | ARCm | Gradient scaling constant |
+| **Quasi-Newton** ||||
+| `hess_method` | "fd" | SR1/BFGS | "analytic", "fd", "sr1", "bfgs" |
+| `sr1_skip_tol` | $10^{-6}$ | SR1 | Denominator threshold |
+| `sr1_restart_after` | 5 | SR1 | Skips before restart |
+| `sr1_init_scale` | "bb" | SR1 | Restart scaling |
+| **Step Bounds** ||||
+| `step_max` | NULL | Safeguard | Maximum step (NULL = adaptive) |
+| `step_max_factor` | 10 | Safeguard | Adaptive factor |
+| **Robustness** ||||
+| `max_stagnant` | 5 | Stagnation | Iterations before action |
+| `stagnation_reset` | TRUE | Stagnation | Reset QN on stagnation |
+| `max_nan_retries` | 3 | NaN/Inf | Retry attempts |
+| `nan_sigma_factor` | 10 | NaN/Inf | σ multiplier on NaN |
+| **Constraints** ||||
+| `bounds$lower` | NULL | Box | Lower bounds (use -Inf for unbounded) |
+| `bounds$upper` | NULL | Box | Upper bounds (use +Inf for unbounded) |
+| `eq_constraints$A` | NULL | Linear Eq | Constraint matrix (m × n) |
+| `eq_constraints$b` | NULL | Linear Eq | Right-hand side vector |
+| `constraint_tol` | $10^{-10}$ | Constraints | Tolerance for satisfaction check |
+
+# Implementation Changelog
+
+This section documents significant changes made to the pseudocode based on implementation experience and benchmark testing.
+
+| Date | Algorithm | Change | Problem | Rationale |
+|------|-----------|--------|---------|-----------|
+| 2025-01 | Algorithm 5 | Added zero gradient early return (Step 0) | When gradient is exactly zero, secular equation iteration fails to converge because $\|s\| = 0$ cannot satisfy $\|s\| = \lambda/\sigma$ for any $\lambda > 0$ | Zero gradient implies optimality; returning $s = 0$, $\lambda = 0$ immediately is mathematically correct and avoids unnecessary computation |
+| 2025-01 | Algorithm 5 | Changed buffer from $\varepsilon = 10^{-12}$ to $\sqrt{\text{machine\_epsilon}}$ (Step 2) | With buffer $10^{-12}$, when $\lambda_{\text{lower}} = -\lambda_{\min}(H)$ exactly, the regularized Hessian $H + \lambda I$ has a near-zero eigenvalue, causing Cholesky to fail with "leading minor not positive" | $\sqrt{\text{machine\_epsilon}} \approx 1.49 \times 10^{-8}$ is the standard numerical tolerance for detecting near-singularity; ensures $H + \lambda I$ is strictly positive definite, not just semi-definite |
+| 2025-01 | Algorithm 5 | Added Cholesky retry logic with exponential backoff (Steps 3, 5) | Even with sqrt(eps) buffer, edge cases with ill-conditioned Hessians can still cause Cholesky failure | Retry with doubled $\lambda$ (up to 5 attempts) provides graceful degradation; larger regularization always makes the problem more well-conditioned |
+| 2025-01 | Algorithm 5 | Changed from `mchol` to `ldl` for shift estimation (Step 1) | Implementation uses `fastmatrix::ldl()` which directly provides diagonal D for eigenvalue estimation | LDL decomposition gives $\lambda_{\text{lower}} = \max(0, -\min(D))$ directly; simpler than extracting perturbation from modified Cholesky |
+
+## Benchmark Validation
+
+These changes were validated on 80 test cases (8 benchmark functions × 10 starting points):
+
+| Metric | Before Fix | After Fix |
+|--------|------------|-----------|
+| Converged | 77/80 (96.3%) | 80/80 (100%) |
+| Correct (err < 1e-4) | 53/80 (66.3%) | 56/80 (70.0%) |
+| Errors/Crashes | 3 | 0 |
+
+Comparison with `trust::trust` package showed arcopt is competitive:
+- arcopt: 56/80 correct, avg 7.6 iterations (when both succeed)
+- trust: 55/80 correct, avg 8.6 iterations (when both succeed)
+
+# References
+
+- Cartis, C., Gould, N. I. M., & Toint, P. L. (2011). Adaptive cubic regularisation methods for unconstrained optimization. Part I: motivation, convergence and numerical results. *Mathematical Programming*, 127(2), 245-295.
+
+- Gould, N. I. M., Porcelli, M., & Toint, P. L. (2012). Updating the regularization parameter in the adaptive cubic regularization algorithm. *Computational Optimization and Applications*, 53(1), 1-22.
+
+- Wang, Z., Zhou, Y., Liang, Y., & Lan, G. (2018). Cubic regularization with momentum for nonconvex optimization. *UAI 2018*.
+
+- Benson, H. Y., & Shanno, D. F. (2018). Cubic regularization in symmetric rank-1 quasi-Newton methods. *Mathematical Programming Computation*, 10(4), 457-486.
+
+- Nocedal, J., & Wright, S. J. (2006). *Numerical Optimization* (2nd ed.). Springer.
+
+- Stan Development Team. CmdStan User's Guide: Optimization. https://mc-stan.org/docs/cmdstan-guide/optimize_config.html
