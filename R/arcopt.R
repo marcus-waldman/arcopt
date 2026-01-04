@@ -127,6 +127,8 @@ arcopt <- function(x0, fn, gr, hess = NULL,
     gtol_abs = 1e-5,
     xtol_abs = 1e-8,
     sigma0 = 1.0,
+    sigma_min = 1e-6,
+    sigma_max = 1e12,
     eta1 = 0.1,
     eta2 = 0.9,
     gamma1 = 0.5,
@@ -136,7 +138,7 @@ arcopt <- function(x0, fn, gr, hess = NULL,
     momentum_tau = 0.5,
     momentum_alpha1 = 0.1,
     momentum_alpha2 = 1.0,
-    trace = FALSE
+    trace = 1
   )
 
   control <- modifyList(control_defaults, control)
@@ -190,6 +192,40 @@ arcopt <- function(x0, fn, gr, hess = NULL,
 
   converged <- FALSE
   conv_reason <- ""
+
+  # Initialize trace storage based on trace level
+  trace_data <- NULL
+  if (control$trace >= 1) {
+    trace_data <- list(
+      f = numeric(0),
+      g_norm = numeric(0),
+      converge_reason = character(0)
+    )
+
+    if (control$trace >= 2) {
+      trace_data$sigma <- numeric(0)
+      trace_data$rho <- numeric(0)
+      trace_data$step_type <- character(0)
+      trace_data$solver_used <- character(0)
+      trace_data$rcond <- numeric(0)
+      trace_data$lambda <- numeric(0)
+      trace_data$time <- numeric(0)
+    }
+
+    if (control$trace >= 3) {
+      n <- length(x0)
+      trace_data$x <- matrix(NA_real_, nrow = 0, ncol = n)
+      trace_data$s <- matrix(NA_real_, nrow = 0, ncol = n)
+      trace_data$H <- array(NA_real_, dim = c(0, n, n))
+      trace_data$converge_criteria <- list()
+      if (control$use_momentum) {
+        trace_data$beta <- numeric(0)
+      }
+    }
+  }
+
+  # Initialize iteration timer
+  iter_start_time <- NULL
 
   # Main optimization loop
   while (iter < control$maxit) {
@@ -315,7 +351,9 @@ arcopt <- function(x0, fn, gr, hess = NULL,
               eta1 = control$eta1,
               eta2 = control$eta2,
               gamma1 = control$gamma1,
-              gamma2 = control$gamma2
+              gamma2 = control$gamma2,
+              sigma_min = control$sigma_min,
+              sigma_max = control$sigma_max
             )
 
             prev_rejected <- FALSE
@@ -477,8 +515,101 @@ arcopt <- function(x0, fn, gr, hess = NULL,
         eta1 = control$eta1,
         eta2 = control$eta2,
         gamma1 = control$gamma1,
-        gamma2 = control$gamma2
+        gamma2 = control$gamma2,
+        sigma_min = control$sigma_min,
+        sigma_max = control$sigma_max
       )
+    }
+
+    # Capture trace data for this iteration
+    if (control$trace >= 1) {
+      iter_end_time <- Sys.time()
+
+      # Level 1
+      trace_data$f <- c(trace_data$f, f_current)
+      trace_data$g_norm <- c(trace_data$g_norm, max(abs(g_current)))
+      trace_data$converge_reason <- c(trace_data$converge_reason,
+                                       if (iter == 0) "init" else "continuing")
+
+      if (control$trace >= 2) {
+        # Level 2
+        trace_data$sigma <- c(trace_data$sigma, sigma_current)
+        trace_data$rho <- c(trace_data$rho, if (iter == 0) NA_real_ else rho)
+        trace_data$step_type <- c(trace_data$step_type,
+                                   if (iter == 0) "init" else step_type)
+        trace_data$solver_used <- c(trace_data$solver_used,
+                                     if (iter == 0 || step_type == "newton")
+                                       "cholesky" else "eigen")
+
+        # Compute reciprocal condition number
+        if (!is.null(h_current)) {
+          eig_vals <- eigen(h_current, symmetric = TRUE, only.values = TRUE)$values
+          rcond_val <- if (all(eig_vals > 0)) {
+            min(eig_vals) / max(eig_vals)
+          } else {
+            0  # Indefinite
+          }
+        } else {
+          rcond_val <- NA_real_
+        }
+        trace_data$rcond <- c(trace_data$rcond, rcond_val)
+
+        # Lambda = sigma * ||s||
+        lambda_val <- if (iter == 0) NA_real_ else {
+          sigma_current * sqrt(sum(s_current^2))
+        }
+        trace_data$lambda <- c(trace_data$lambda, lambda_val)
+
+        # Iteration time
+        iter_time <- if (is.null(iter_start_time)) 0 else {
+          as.numeric(iter_end_time - iter_start_time, units = "secs")
+        }
+        trace_data$time <- c(trace_data$time, iter_time)
+      }
+
+      if (control$trace >= 3) {
+        # Level 3
+        trace_data$x <- rbind(trace_data$x, x_current)
+        trace_data$s <- rbind(trace_data$s,
+                              if (iter == 0) rep(NA_real_, length(x_current)) else s_current)
+
+        # Hessian (3D array binding)
+        if (is.null(h_current)) {
+          h_to_store <- matrix(NA_real_, length(x_current), length(x_current))
+        } else {
+          h_to_store <- h_current
+        }
+        trace_data$H <- array(c(trace_data$H, h_to_store),
+                              dim = c(dim(trace_data$H)[1] + 1, length(x_current), length(x_current)))
+
+        # Convergence criteria (all 6 checks)
+        trace_data$converge_criteria[[iter + 1]] <- list(
+          gtol_abs = max(abs(g_current)),
+          gtol_rel = max(abs(g_current * x_current / max(1, abs(f_current)))),
+          gtol_scaled = max(abs(g_current / pmax(abs(f_current), 1))),
+          xtol_abs = if (iter == 0) NA_real_ else max(abs(s_current)),
+          xtol_rel = if (iter == 0) NA_real_ else {
+            max(abs(s_current / pmax(abs(x_current), 1)))
+          },
+          ftol_rel = if (iter == 0 || is.na(f_previous)) NA_real_ else {
+            abs(f_current - f_previous) / pmax(abs(f_current), 1)
+          }
+        )
+
+        # Beta (if momentum enabled)
+        if (control$use_momentum) {
+          # Try to extract beta_low from parent environment if it exists
+          beta_val <- if (iter == 0 || !exists("beta_low", inherits = FALSE)) {
+            0
+          } else {
+            beta_low
+          }
+          trace_data$beta <- c(trace_data$beta, beta_val)
+        }
+      }
+
+      # Reset timer for next iteration
+      iter_start_time <- Sys.time()
     }
 
     iter <- iter + 1
@@ -490,14 +621,22 @@ arcopt <- function(x0, fn, gr, hess = NULL,
     conv_reason <- "max_iter"
   }
 
-  list(
+  result <- list(
     par = x_current,
     value = f_current,
     gradient = g_current,
     hessian = h_current,
+    sigma = sigma_current,
     converged = converged,
     iterations = iter,
     evaluations = list(fn = fn_evals, gr = gr_evals, hess = hess_evals),
     message = conv_reason
   )
+
+  # Add trace data if collected
+  if (control$trace >= 1) {
+    result$trace <- trace_data
+  }
+
+  return(result)
 }

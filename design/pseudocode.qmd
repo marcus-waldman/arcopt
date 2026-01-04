@@ -306,8 +306,8 @@ The `trace` parameter controls what information is stored per iteration for post
 |-------|--------|--------|
 | 0 | Nothing (only final result) | O(n) |
 | 1 | `f_k`, `||g_k||`, `converge_reason` | O(K) |
-| 2 | + `σ_k`, `ρ_k`, `step_type`, `solver_used`, `iter_time` | O(K) |
-| 3 | + `x_k`, `s_k`, `H_k`, all convergence criteria, SR1 diagnostics, `β_k` | O(Kn²) |
+| 2 | + `σ_k`, `ρ_k`, `step_type`, `solver_used`, `rcond_k`, `iter_time` | O(K) |
+| 3 | + `x_k`, `s_k`, `H_k`, all convergence criteria, `β_k` | O(Kn²) |
 
 where K = number of iterations.
 
@@ -325,6 +325,8 @@ result$trace <- list(
   sigma = numeric(K),       # Regularization parameter
   rho = numeric(K),         # Actual/predicted reduction ratio
   step_type = character(K), # "newton", "cubic"
+  solver_used = character(K), # "cholesky", "eigen" (future: "cg_lanczos")
+  rcond = numeric(K),       # Reciprocal condition number of H_k
   lambda = numeric(K),      # Cubic subproblem multiplier (λ = σ||s||)
   time = numeric(K),        # Wall-clock seconds per iteration
 
@@ -333,7 +335,6 @@ result$trace <- list(
   s = matrix(K, n),         # Steps (K × n)
   H = array(K, n, n),       # Hessians (K × n × n)
   converge_criteria = list(...),  # All 6 convergence values per iteration
-  sr1_skip_count = integer(K),    # SR1 skipped updates (if using SR1)
   beta = numeric(K)         # Momentum parameter (if using momentum)
 )
 ```
@@ -763,7 +764,7 @@ PROCEDURE:
 | `eta_1` | 0.1 | $(0, \eta_2)$ | Acceptance threshold |
 | `eta_2` | 0.9 | $(\eta_1, 1)$ | Very successful threshold |
 | `gamma` | 2.0 | $(1, \infty)$ | Multiplicative factor |
-| `sigma_min` | $10^{-12}$ | $(0, \sigma_0)$ | Lower bound |
+| `sigma_min` | $10^{-6}$ | $(0, \sigma_0)$ | Lower bound (may need $10^{-2}$ for indefinite problems) |
 | `sigma_max` | $10^{12}$ | $(\sigma_0, \infty)$ | Upper bound |
 
 # Momentum Acceleration
@@ -1440,7 +1441,7 @@ x* ← transform_to_x_space(z*, x_p, Z)
 | `eta_1` | 0.1 | Core ARC | Acceptance threshold |
 | `eta_2` | 0.9 | Core ARC | Very successful threshold |
 | `gamma` | 2.0 | Core ARC | Update factor |
-| `sigma_min` | $10^{-12}$ | Core ARC | Lower bound |
+| `sigma_min` | $10^{-6}$ | Core ARC | Lower bound |
 | `sigma_max` | $10^{12}$ | Core ARC | Upper bound |
 | `use_interpolation` | FALSE | CGT | Enable interpolation variant |
 | **Cubic Solver** ||||
