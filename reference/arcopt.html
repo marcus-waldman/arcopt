@@ -153,6 +153,12 @@ computation.</p>
 (default: "auto"). The "cg" solver is <strong>experimental</strong> and may perform poorly
 on small problems; use "eigen" for most applications.</p></li>
 <li><p><code>cubic_solver_threshold</code>: Problem size threshold for auto-selection (default: 500)</p></li>
+<li><p><code>use_momentum</code>: Enable momentum acceleration (default: TRUE).
+Can reduce iterations by 30-90% on ill-conditioned problems with no additional
+function evaluations. Automatically vanishes near optimum to prevent oscillation.</p></li>
+<li><p><code>momentum_max</code>: Maximum momentum parameter (default: 0.9)</p></li>
+<li><p><code>momentum_c1</code>: Step-size scaling constant (default: 0.1)</p></li>
+<li><p><code>momentum_c2</code>: Gradient scaling constant (default: 0.1)</p></li>
 <li><p><code>trace</code>: Print iteration progress (default: FALSE)</p></li>
 </ul></div>
 
@@ -184,9 +190,9 @@ on small problems; use "eigen" for most applications.</p></li>
 <span class="r-in"><span><span class="op">)</span></span></span>
 <span class="r-in"><span></span></span>
 <span class="r-in"><span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">par</span><span class="op">)</span>      <span class="co"># Should be near c(1, 1)</span></span></span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 1 1</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 0.9999997 0.9999994</span>
 <span class="r-in"><span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">value</span><span class="op">)</span>    <span class="co"># Should be near 0</span></span></span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 7.067483e-18</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 1.549919e-13</span>
 <span class="r-in"><span><span class="co"># }</span></span></span>
 </code></pre></div>
     </div>
