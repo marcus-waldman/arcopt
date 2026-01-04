@@ -85,9 +85,8 @@ print(result$value)    # [1] 7.067483e-18
 
 ## Why Provide the Hessian?
 
-**arcopt** is **Hessian-centric** by design. While you *can* use
-quasi-Newton approximations (SR1), providing an analytic Hessian is
-strongly recommended because:
+**arcopt** is **Hessian-centric** by design. Providing an analytic
+Hessian is strongly recommended because:
 
 1.  **Cubic regularization depends critically on accurate curvature**
 2.  **Statistical models often have tractable second derivatives**
@@ -100,14 +99,11 @@ strongly recommended because:
 # Option 1: Analytic Hessian (best)
 arcopt(x0, fn, gr, hess = hess_analytic)
 
-# Option 2: Matrix-free Hessian-vector products (large-scale)
-arcopt(x0, fn, gr, hess_vec = function(v) your_hess_vec_product(v))
-
-# Option 3: Finite differences (convenience, but slower)
+# Option 2: Finite differences (convenience, slower but robust)
 arcopt(x0, fn, gr, hess = NULL, control = list(use_fd = TRUE))
 
-# Option 4: SR1 quasi-Newton (fallback only)
-arcopt(x0, fn, gr, hess = NULL, control = list(use_sr1 = TRUE))
+# Option 3: Matrix-free (large-scale, future work)
+# See design/scalable-arcs.qmd
 ```
 
 ## Handling Hard Problems
@@ -214,32 +210,24 @@ problems.
 
 ## Advanced Features
 
-### Automatic Solver Selection
+### Cubic Subproblem Solver
 
-Two cubic solvers are available with automatic selection:
+arcopt uses **eigendecomposition-based cubic solver** (Algorithm 5a):
+
+- Handles indefinite Hessians robustly via eigenvalue decomposition
+- Explicit negative curvature detection
+- Direct implementation of Cartis-Gould-Toint theory
 
 ``` r
-# Auto-select based on problem size (default)
-arcopt(..., control = list(cubic_solver = "auto"))
+# Default (uses eigendecomposition)
+result <- arcopt(x0, fn, gr, hess)
 
-# n ≤ 500: Uses eigendecomposition (Algorithm 5a)
-#          - Full spectral decomposition
-#          - Explicit hard-case handling
-#          - Robust for small-medium problems
-
-# n > 500: Uses ARCqK multi-shift CG-Lanczos (Algorithm 5b)
-#          - Matrix-free, single Hessian-vector product per iteration
-#          - 61 geometric shifts (10^-10 to 10^20)
-#          - Automatic negative curvature detection
-
-# Force specific solver
-arcopt(..., control = list(cubic_solver = "eigen"))  # Always eigendecomposition
-arcopt(..., control = list(cubic_solver = "cg"))     # Always CG (experimental)
+# Explicit solver selection
+result <- arcopt(x0, fn, gr, hess, control = list(cubic_solver = "eigen"))
 ```
 
-**Note**: The CG solver is **experimental** and may perform poorly on
-small problems (n \< 100) due to discrete shift selection and potential
-Lanczos breakdown.
+For large-scale matrix-free optimization (n \> 500), see
+`design/scalable-arcs.qmd` for deferred Lanczos-based solvers.
 
 ### Momentum Acceleration
 
@@ -373,7 +361,7 @@ starting points.
 |---------------------|-------------------------|--------------------------|-------------------------------|
 | Indefinite Hessian  | ✓ Handles automatically | ✗ Can fail or diverge    | ✗ Can fail or diverge         |
 | Saddle point escape | ✓ Provably escapes      | ✗ Can get stuck          | ✗ Can get stuck               |
-| Requires Hessian    | ✓ Yes (recommended)     | ✗ No (quasi-Newton)      | ✗ No (quasi-Newton)           |
+| Requires Hessian    | ✓ Yes (analytic or FD)  | ✗ No (quasi-Newton)      | ✗ No (quasi-Newton)           |
 | Box constraints     | ✓ Native support        | ✗ No                     | ✓ Native support              |
 | Convergence theory  | ✓ Global for nonconvex  | ✓ Global for convex only | ✓ Global for convex only      |
 | Best for            | Complex likelihoods     | Smooth convex            | Large-scale bound-constrained |
@@ -405,20 +393,19 @@ arcopt(
 
 ### Control Parameters
 
-| Parameter                | Default  | Description                                |
-|--------------------------|----------|--------------------------------------------|
-| `maxit`                  | 1000     | Maximum iterations                         |
-| `gtol_abs`               | 1e-5     | Gradient norm tolerance                    |
-| `ftol_abs`               | 1e-8     | Function change tolerance                  |
-| `xtol_abs`               | 1e-8     | Parameter change tolerance                 |
-| `sigma0`                 | 1.0      | Initial regularization parameter           |
-| `cubic_solver`           | “auto”   | Cubic solver: “auto”, “eigen”, “cg”, “ldl” |
-| `cubic_solver_threshold` | 500      | Auto-selection threshold                   |
-| `use_momentum`           | **TRUE** | Enable momentum acceleration (ARCm)        |
-| `momentum_max`           | 0.9      | Maximum momentum parameter β               |
-| `momentum_c1`            | 0.1      | Step-size scaling constant                 |
-| `momentum_c2`            | 0.1      | Gradient scaling constant                  |
-| `trace`                  | FALSE    | Print iteration progress                   |
+| Parameter      | Default  | Description                         |
+|----------------|----------|-------------------------------------|
+| `maxit`        | 1000     | Maximum iterations                  |
+| `gtol_abs`     | 1e-5     | Gradient norm tolerance             |
+| `ftol_abs`     | 1e-8     | Function change tolerance           |
+| `xtol_abs`     | 1e-8     | Parameter change tolerance          |
+| `sigma0`       | 1.0      | Initial regularization parameter    |
+| `cubic_solver` | “auto”   | Cubic solver: “auto” or “eigen”     |
+| `use_momentum` | **TRUE** | Enable momentum acceleration (ARCm) |
+| `momentum_max` | 0.9      | Maximum momentum parameter β        |
+| `momentum_c1`  | 0.1      | Step-size scaling constant          |
+| `momentum_c2`  | 0.1      | Gradient scaling constant           |
+| `trace`        | FALSE    | Print iteration progress            |
 
 Full list:
 [`?arcopt`](https://marcus-waldman.github.io/arcopt/reference/arcopt.md)

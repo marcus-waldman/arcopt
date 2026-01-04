@@ -13,7 +13,6 @@ arcopt(
   fn,
   gr,
   hess = NULL,
-  hess_vec = NULL,
   lower = rep(-Inf, length(x0)),
   upper = rep(Inf, length(x0)),
   control = list()
@@ -39,14 +38,7 @@ arcopt(
 - hess:
 
   Function that computes the Hessian matrix. Should take a numeric
-  vector of length Q and return a Q×Q symmetric matrix. Either `hess` or
-  `hess_vec` must be provided.
-
-- hess_vec:
-
-  Function that computes Hessian-vector products. Should take a numeric
-  vector v of length Q and return H\*v (length Q). Allows matrix-free
-  optimization for large-scale problems. Optional if `hess` is provided.
+  vector of length Q and return a Q×Q symmetric matrix. Required.
 
 - lower:
 
@@ -93,9 +85,9 @@ where \\\sigma_k\\ is adaptively adjusted based on model accuracy.
 ### Hessian Requirement
 
 ARC critically depends on accurate curvature information. The `hess`
-argument is strongly recommended. If `hess = NULL`, the algorithm falls
-back to SR1 quasi-Newton approximation, which is less robust but avoids
-Hessian computation.
+argument is required. For convenience, finite-difference Hessians can be
+computed automatically with `control$use_fd = TRUE`, but analytic
+Hessians are strongly recommended for best performance.
 
 ### Control Parameters
 
@@ -119,20 +111,14 @@ The `control` list accepts:
 
 - `gamma2`: Regularization increase factor (default: 2.0)
 
-- `use_sr1`: Use SR1 quasi-Newton if `hess = NULL` (default: TRUE)
+- `cubic_solver`: Solver selection: "auto" (recommended) or "eigen"
+  (default: "auto"). Auto-selection uses eigendecomposition (Algorithm
+  5a) for robust handling of indefinite Hessians and hard cases.
 
-- `cubic_solver`: Solver selection: "auto" (recommended), "ldl",
-  "eigen", "cg" (default: "auto"). The "cg" solver is **experimental**
-  and may perform poorly on small problems; use "eigen" for most
-  applications.
-
-- `cubic_solver_threshold`: Problem size threshold for auto-selection
-  (default: 500)
-
-- `use_momentum`: Enable momentum acceleration (default: TRUE). Can
-  reduce iterations by 30-90% on ill-conditioned problems with no
-  additional function evaluations. Automatically vanishes near optimum
-  to prevent oscillation.
+- `use_momentum`: Enable momentum acceleration (default: FALSE). When
+  enabled, can help on some ill-conditioned problems but may cause
+  oscillation with small momentum coefficients. Not recommended for
+  general use.
 
 - `momentum_max`: Maximum momentum parameter (default: 0.9)
 
@@ -169,8 +155,8 @@ result <- arcopt(
 )
 
 print(result$par)      # Should be near c(1, 1)
-#> [1] 0.9999997 0.9999994
+#> [1] 1 1
 print(result$value)    # Should be near 0
-#> [1] 1.549919e-13
+#> [1] 7.067483e-18
 # }
 ```

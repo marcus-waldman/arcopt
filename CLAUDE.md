@@ -20,10 +20,10 @@ The optimizer implements a hierarchical 4-layer system:
 1.  **Orchestration Layer**: Main loop (Algorithm 1) that controls
     iteration flow and dispatches to sub-algorithms
 2.  **Core Solvers Layer**: Newton step computation (Algorithm 1a) and
-    cubic subproblem solver (Algorithm 5)
+    eigendecomposition cubic solver (Algorithm 5a)
 3.  **Adaptation Layer**: Convergence checks (Algorithm 0), σ (sigma)
-    regularization updates (Algorithms 2a/2b), momentum (Algorithm 3),
-    and SR1 quasi-Newton updates (Algorithm 4)
+    regularization updates (Algorithms 2a/2b), and momentum (Algorithm
+    3)
 4.  **Safeguards Layer**: Indefiniteness handling (Algorithms 6a/6b),
     box constraint truncation (Algorithm 7), and linear equality
     constraint handling (Algorithm 8)
@@ -32,7 +32,8 @@ The optimizer implements a hierarchical 4-layer system:
 
 - **Hessian-Centric**: Accurate second derivative information is
   prioritized. Hessian sources in order of preference: analytic \>
-  automatic differentiation \> finite differences \> SR1 quasi-Newton
+  automatic differentiation \> finite differences. Quasi-Newton methods
+  deferred to future work (see design/scalable-arcs.qmd).
 - **Robust by Default**: Single entry point `arcopt(x0, fn, gr, hess)`
   with sensible defaults; users should not need to manually tune
   regularization or select solvers
@@ -45,13 +46,13 @@ The optimizer implements a hierarchical 4-layer system:
 
 - **design/design-principles.qmd**: Design philosophy, target user
   profile, problem characteristics, and core principles
-- **design/pseudocode.qmd**: Complete algorithmic specifications (9
+- **design/pseudocode.qmd**: Complete algorithmic specifications (8
   algorithm groups) with system flowchart and detailed pseudocode
 - **design/literature-review.qmd**: Academic references and theoretical
   foundations
 - **literature/consensus_reviews/**: Topic-specific reviews on
-  regularization parameters, quasi-Newton methods, failure modes, and
-  comparisons with other ARC implementations
+  regularization parameters, failure modes, and comparisons with other
+  ARC implementations
 
 ## Development Guidelines
 
@@ -67,8 +68,8 @@ Focus on algorithm specification before coding
 1.  **Follow the pseudocode specifications** in design/pseudocode.qmd
     exactly—these are implementation-ready
 2.  **Maintain Hessian-centric philosophy**: Default interface requires
-    Hessian function; provide convenience wrappers (FD, SR1) as
-    secondary options
+    Hessian function; provide finite-difference wrapper as convenience
+    option
 3.  **Prioritize robustness**: Include automatic indefiniteness
     detection, adaptive σ adjustment, and numerical safeguards
 4.  **Test on pathological problems**: Ill-conditioned, nonconvex,
@@ -79,12 +80,31 @@ Focus on algorithm specification before coding
 ### Future Development Priorities
 
 Based on literature review and design documents: - Core cubic
-regularization solver (Algorithm 5) with modified Cholesky
-factorization - Adaptive regularization updates (Algorithms 2a/2b) for σ
-adjustment - Indefiniteness handling (Algorithms 6a/6b) for negative
-curvature - Constraint handling (Algorithms 7-8) for box and linear
-equality constraints - SR1 quasi-Newton updates (Algorithm 4) as
-approximate Hessian option
+regularization solver (Algorithm 5a) with eigendecomposition ✓ -
+Adaptive regularization updates (Algorithms 2a/2b) for σ adjustment ✓ -
+Indefiniteness handling for negative curvature ✓ - Constraint handling
+(Algorithms 7-8) for box and linear equality constraints ✓ - Momentum
+acceleration (Algorithm 3) as ARCm variant ✓
+
+### Deferred Features
+
+To maintain focus on core use case (statisticians, 2-500 parameters,
+analytic Hessians):
+
+**Removed in favor of eigendecomposition:** - LDL-based cubic solver
+(see design/historical/ldl-solver.qmd)
+
+**Removed from current plans:** - SR1 quasi-Newton updates - see
+design/scalable-arcs.qmd for preserved Algorithm 4 - Rationale: Cubic
+regularization depends on accurate curvature; finite differences
+preferred over quasi-Newton approximations
+
+**Deferred to future releases:** - ARCqK multi-shift CG-Lanczos solver
+(Algorithm 5b) for n \> 500 - Matrix-free optimization via hess_vec
+interface
+
+See design/scalable-arcs.qmd for preserved implementations and design
+rationale.
 
 ## Development Workflow & CRAN Compliance
 

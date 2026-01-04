@@ -136,7 +136,7 @@
 <div class="section level2">
 <h2 id="why-provide-the-hessian">Why Provide the Hessian?<a class="anchor" aria-label="anchor" href="#why-provide-the-hessian"></a>
 </h2>
-<p><strong>arcopt</strong> is <strong>Hessian-centric</strong> by design. While you <em>can</em> use quasi-Newton approximations (SR1), providing an analytic Hessian is strongly recommended because:</p>
+<p><strong>arcopt</strong> is <strong>Hessian-centric</strong> by design. Providing an analytic Hessian is strongly recommended because:</p>
 <ol style="list-style-type: decimal">
 <li><strong>Cubic regularization depends critically on accurate curvature</strong></li>
 <li>
@@ -150,14 +150,11 @@
 <code class="sourceCode R"><span><span class="co"># Option 1: Analytic Hessian (best)</span></span>
 <span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, hess <span class="op">=</span> <span class="va">hess_analytic</span><span class="op">)</span></span>
 <span></span>
-<span><span class="co"># Option 2: Matrix-free Hessian-vector products (large-scale)</span></span>
-<span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, hess_vec <span class="op">=</span> <span class="kw">function</span><span class="op">(</span><span class="va">v</span><span class="op">)</span> <span class="fu">your_hess_vec_product</span><span class="op">(</span><span class="va">v</span><span class="op">)</span><span class="op">)</span></span>
-<span></span>
-<span><span class="co"># Option 3: Finite differences (convenience, but slower)</span></span>
+<span><span class="co"># Option 2: Finite differences (convenience, slower but robust)</span></span>
 <span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, hess <span class="op">=</span> <span class="cn">NULL</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>use_fd <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span></span>
 <span></span>
-<span><span class="co"># Option 4: SR1 quasi-Newton (fallback only)</span></span>
-<span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, hess <span class="op">=</span> <span class="cn">NULL</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>use_sr1 <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
+<span><span class="co"># Option 3: Matrix-free (large-scale, future work)</span></span>
+<span><span class="co"># See design/scalable-arcs.qmd</span></span></code></pre></div>
 </div>
 <div class="section level2">
 <h2 id="handling-hard-problems">Handling Hard Problems<a class="anchor" aria-label="anchor" href="#handling-hard-problems"></a>
@@ -327,27 +324,21 @@
 <h2 id="advanced-features">Advanced Features<a class="anchor" aria-label="anchor" href="#advanced-features"></a>
 </h2>
 <div class="section level3">
-<h3 id="automatic-solver-selection">Automatic Solver Selection<a class="anchor" aria-label="anchor" href="#automatic-solver-selection"></a>
+<h3 id="cubic-subproblem-solver">Cubic Subproblem Solver<a class="anchor" aria-label="anchor" href="#cubic-subproblem-solver"></a>
 </h3>
-<p>Two cubic solvers are available with automatic selection:</p>
+<p>arcopt uses <strong>eigendecomposition-based cubic solver</strong> (Algorithm 5a):</p>
+<ul>
+<li>Handles indefinite Hessians robustly via eigenvalue decomposition</li>
+<li>Explicit negative curvature detection</li>
+<li>Direct implementation of Cartis-Gould-Toint theory</li>
+</ul>
 <div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># Auto-select based on problem size (default)</span></span>
-<span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">...</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>cubic_solver <span class="op">=</span> <span class="st">"auto"</span><span class="op">)</span><span class="op">)</span></span>
+<code class="sourceCode R"><span><span class="co"># Default (uses eigendecomposition)</span></span>
+<span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, <span class="va">hess</span><span class="op">)</span></span>
 <span></span>
-<span><span class="co"># n ≤ 500: Uses eigendecomposition (Algorithm 5a)</span></span>
-<span><span class="co">#          - Full spectral decomposition</span></span>
-<span><span class="co">#          - Explicit hard-case handling</span></span>
-<span><span class="co">#          - Robust for small-medium problems</span></span>
-<span></span>
-<span><span class="co"># n &gt; 500: Uses ARCqK multi-shift CG-Lanczos (Algorithm 5b)</span></span>
-<span><span class="co">#          - Matrix-free, single Hessian-vector product per iteration</span></span>
-<span><span class="co">#          - 61 geometric shifts (10^-10 to 10^20)</span></span>
-<span><span class="co">#          - Automatic negative curvature detection</span></span>
-<span></span>
-<span><span class="co"># Force specific solver</span></span>
-<span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">...</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>cubic_solver <span class="op">=</span> <span class="st">"eigen"</span><span class="op">)</span><span class="op">)</span>  <span class="co"># Always eigendecomposition</span></span>
-<span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">...</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>cubic_solver <span class="op">=</span> <span class="st">"cg"</span><span class="op">)</span><span class="op">)</span>     <span class="co"># Always CG (experimental)</span></span></code></pre></div>
-<p><strong>Note</strong>: The CG solver is <strong>experimental</strong> and may perform poorly on small problems (n &lt; 100) due to discrete shift selection and potential Lanczos breakdown.</p>
+<span><span class="co"># Explicit solver selection</span></span>
+<span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, <span class="va">hess</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>cubic_solver <span class="op">=</span> <span class="st">"eigen"</span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
+<p>For large-scale matrix-free optimization (n &gt; 500), see <code>design/scalable-arcs.qmd</code> for deferred Lanczos-based solvers.</p>
 </div>
 <div class="section level3">
 <h3 id="momentum-acceleration">Momentum Acceleration<a class="anchor" aria-label="anchor" href="#momentum-acceleration"></a>
@@ -511,7 +502,7 @@
 </tr>
 <tr class="odd">
 <td>Requires Hessian</td>
-<td>✓ Yes (recommended)</td>
+<td>✓ Yes (analytic or FD)</td>
 <td>✗ No (quasi-Newton)</td>
 <td>✗ No (quasi-Newton)</td>
 </tr>
@@ -598,34 +589,29 @@
 <tr class="even">
 <td><code>cubic_solver</code></td>
 <td>“auto”</td>
-<td>Cubic solver: “auto”, “eigen”, “cg”, “ldl”</td>
+<td>Cubic solver: “auto” or “eigen”</td>
 </tr>
 <tr class="odd">
-<td><code>cubic_solver_threshold</code></td>
-<td>500</td>
-<td>Auto-selection threshold</td>
-</tr>
-<tr class="even">
 <td><code>use_momentum</code></td>
 <td><strong>TRUE</strong></td>
 <td>Enable momentum acceleration (ARCm)</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>momentum_max</code></td>
 <td>0.9</td>
 <td>Maximum momentum parameter β</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>momentum_c1</code></td>
 <td>0.1</td>
 <td>Step-size scaling constant</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>momentum_c2</code></td>
 <td>0.1</td>
 <td>Gradient scaling constant</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>trace</code></td>
 <td>FALSE</td>
 <td>Print iteration progress</td>

@@ -32,6 +32,10 @@ List with components:
 
   Newton step vector if successful, NULL otherwise
 
+- pred_reduction:
+
+  Predicted reduction from quadratic model if successful, NULL otherwise
+
 ## Details
 
 The algorithm:
