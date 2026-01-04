@@ -138,13 +138,13 @@ test_that("arcopt works on higher dimensional problems", {
   expect_equal(result$par, rep(0, n), tolerance = 1e-5)
 })
 
-test_that("arcopt requires hess function", {
+test_that("arcopt requires hess or hess_vec", {
   sphere <- function(x) sum(x^2)
   sphere_gr <- function(x) 2 * x
 
   expect_error(
-    arcopt(x0 = c(1, 1), fn = sphere, gr = sphere_gr, hess = NULL),
-    "hess function is required"
+    arcopt(x0 = c(1, 1), fn = sphere, gr = sphere_gr, hess = NULL, hess_vec = NULL),
+    "At least one of 'hess' or 'hess_vec' must be provided"
   )
 })
 

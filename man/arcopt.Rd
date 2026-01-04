@@ -9,6 +9,7 @@ arcopt(
   fn,
   gr,
   hess = NULL,
+  hess_vec = NULL,
   lower = rep(-Inf, length(x0)),
   upper = rep(Inf, length(x0)),
   control = list()
@@ -24,8 +25,12 @@ numeric vector of length Q and return a scalar.}
 of length Q and return a numeric vector of length Q. Required.}
 
 \item{hess}{Function that computes the Hessian matrix. Should take a numeric
-vector of length Q and return a Q×Q symmetric matrix. Required for full ARC;
-if NULL, uses SR1 quasi-Newton approximation (see Details).}
+vector of length Q and return a Q×Q symmetric matrix. Either \code{hess} or
+\code{hess_vec} must be provided.}
+
+\item{hess_vec}{Function that computes Hessian-vector products. Should take
+a numeric vector v of length Q and return H*v (length Q). Allows matrix-free
+optimization for large-scale problems. Optional if \code{hess} is provided.}
 
 \item{lower}{Numeric vector of lower bounds (length Q). Use \code{-Inf} for
 unbounded parameters. Default: all \code{-Inf}.}
@@ -80,6 +85,10 @@ The \code{control} list accepts:
 \item \code{gamma1}: Regularization decrease factor (default: 0.5)
 \item \code{gamma2}: Regularization increase factor (default: 2.0)
 \item \code{use_sr1}: Use SR1 quasi-Newton if \code{hess = NULL} (default: TRUE)
+\item \code{cubic_solver}: Solver selection: "auto" (recommended), "ldl", "eigen", "cg"
+(default: "auto"). The "cg" solver is \strong{experimental} and may perform poorly
+on small problems; use "eigen" for most applications.
+\item \code{cubic_solver_threshold}: Problem size threshold for auto-selection (default: 500)
 \item \code{trace}: Print iteration progress (default: FALSE)
 }
 }

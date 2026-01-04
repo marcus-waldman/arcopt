@@ -10,8 +10,11 @@
 #' @param gr Function that computes the gradient. Should take a numeric vector
 #'   of length Q and return a numeric vector of length Q. Required.
 #' @param hess Function that computes the Hessian matrix. Should take a numeric
-#'   vector of length Q and return a Q×Q symmetric matrix. Required for full ARC;
-#'   if NULL, uses SR1 quasi-Newton approximation (see Details).
+#'   vector of length Q and return a Q×Q symmetric matrix. Either `hess` or
+#'   `hess_vec` must be provided.
+#' @param hess_vec Function that computes Hessian-vector products. Should take
+#'   a numeric vector v of length Q and return H*v (length Q). Allows matrix-free
+#'   optimization for large-scale problems. Optional if `hess` is provided.
 #' @param lower Numeric vector of lower bounds (length Q). Use `-Inf` for
 #'   unbounded parameters. Default: all `-Inf`.
 #' @param upper Numeric vector of upper bounds (length Q). Use `Inf` for
@@ -42,6 +45,10 @@
 #' * `gamma1`: Regularization decrease factor (default: 0.5)
 #' * `gamma2`: Regularization increase factor (default: 2.0)
 #' * `use_sr1`: Use SR1 quasi-Newton if `hess = NULL` (default: TRUE)
+#' * `cubic_solver`: Solver selection: "auto" (recommended), "ldl", "eigen", "cg"
+#'   (default: "auto"). The "cg" solver is **experimental** and may perform poorly
+#'   on small problems; use "eigen" for most applications.
+#' * `cubic_solver_threshold`: Problem size threshold for auto-selection (default: 500)
 #' * `trace`: Print iteration progress (default: FALSE)
 #'
 #' @return A list with components:
@@ -83,7 +90,7 @@
 #' print(result$par)      # Should be near c(1, 1)
 #' print(result$value)    # Should be near 0
 #' }
-arcopt <- function(x0, fn, gr, hess = NULL,
+arcopt <- function(x0, fn, gr, hess = NULL, hess_vec = NULL,
                    lower = rep(-Inf, length(x0)),
                    upper = rep(Inf, length(x0)),
                    control = list()) {
@@ -122,6 +129,8 @@ arcopt <- function(x0, fn, gr, hess = NULL,
     gamma1 = 0.5,
     gamma2 = 2.0,
     use_sr1 = TRUE,
+    cubic_solver = "auto",
+    cubic_solver_threshold = 500,
     trace = FALSE
   )
 
@@ -154,11 +163,17 @@ arcopt <- function(x0, fn, gr, hess = NULL,
     stop("Initial point yields NaN or Inf in function or gradient")
   }
 
+  # Validate Hessian specification
+  if (is.null(hess) && is.null(hess_vec)) {
+    stop("At least one of 'hess' or 'hess_vec' must be provided")
+  }
+
+  # Initialize Hessian if full matrix is provided
   if (!is.null(hess)) {
     h_current <- hess(x_current)
     hess_evals <- hess_evals + 1
   } else {
-    stop("hess function is required for this implementation")
+    h_current <- NULL  # Will use hess_vec in cubic solver
   }
 
   # Initialize history with initial values
@@ -244,9 +259,12 @@ arcopt <- function(x0, fn, gr, hess = NULL,
           x_current <- x_trial
           f_current <- f_trial
           g_current <- gr(x_current)
-          h_current <- hess(x_current)
           gr_evals <- gr_evals + 1
-          hess_evals <- hess_evals + 1
+
+          if (!is.null(hess)) {
+            h_current <- hess(x_current)
+            hess_evals <- hess_evals + 1
+          }
 
           # Check for NaN/Inf in new gradient
           if (!check_finite(f_current, g_current)) {
@@ -268,11 +286,14 @@ arcopt <- function(x0, fn, gr, hess = NULL,
 
     # STEP 3: If Newton failed/skipped, use cubic solver
     if (!used_newton) {
-      # Solve cubic subproblem
-      cubic_result <- solve_cubic_subproblem(
+      # Solve cubic subproblem using dispatcher
+      cubic_result <- solve_cubic_subproblem_dispatch(
         g = g_current,
         H = h_current,
-        sigma = sigma_current
+        hess_vec = hess_vec,
+        sigma = sigma_current,
+        solver = control$cubic_solver,
+        solver_threshold = control$cubic_solver_threshold
       )
 
       s_current <- cubic_result$s
@@ -309,9 +330,12 @@ arcopt <- function(x0, fn, gr, hess = NULL,
         x_current <- x_trial
         f_current <- f_trial
         g_current <- gr(x_current)
-        h_current <- hess(x_current)
         gr_evals <- gr_evals + 1
-        hess_evals <- hess_evals + 1
+
+        if (!is.null(hess)) {
+          h_current <- hess(x_current)
+          hess_evals <- hess_evals + 1
+        }
 
         # Check for NaN/Inf in new gradient
         if (!check_finite(f_current, g_current)) {

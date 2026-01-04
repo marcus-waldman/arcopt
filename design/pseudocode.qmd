@@ -69,8 +69,8 @@ flowchart TD
         M -->|Fail| K
     end
 
-    subgraph CUBIC["Cubic Subproblem (Algorithm 5)"]
-        K --> P[Modified Cholesky Solver<br/>LDL → iterate λ]
+    subgraph CUBIC["Cubic Subproblem (Algorithm 5a/5b)"]
+        K --> P[Eigendecomposition (5a)<br/>or ARCqK (5b)]
         P --> R[Step s]
     end
 
@@ -130,7 +130,8 @@ flowchart TD
 | 2b | Interpolation Update | §5.2 | Lipschitz-enhanced σ adaptation |
 | 3 | ARCm | §6 | Momentum acceleration |
 | 4 | SR1 Update | §7 | Quasi-Newton with safeguards |
-| 5 | Modified Cholesky Solver | §8 | Cubic subproblem via LDL + λ iteration |
+| 5a | Eigendecomposition Solver | §8.1 | Cubic subproblem via spectral decomposition (n ≤ 500) |
+| 5b | ARCqK Multi-Shift Solver | §8.2 | Cubic subproblem via CG-Lanczos (n > 500, sparse) |
 | 6a | Stagnation Recovery | §9.1 | Detect/recover from stagnation |
 | 6b | NaN/Inf Protection | §9.2 | Handle numerical failures |
 | 7a | Box Step Truncation | §10.1 | Apply bounds to step |
@@ -143,49 +144,65 @@ flowchart TD
 
 The table below shows per-call complexity. For the main loop (Algorithm 1), multiply by number of iterations K.
 
-| Algorithm | Operations | f calls | g calls | H calls | Frequency | C++ Benefit |
-|-----------|------------|---------|---------|---------|-----------|-------------|
-| 0 | O(n) | 0 | 0 | 0 | 1/iter | Low (vectorized) |
-| 1 | *orchestration* | 1-2 | 1 | 0-1 | — | Low |
-| 1a | **O(n³)** | 1 | 0 | 0 | 0-1/iter | **Medium** (Gershgorin loop) |
-| 2a | O(1) | 0 | 0 | 0 | 1/iter | None |
-| 2b | O(1) | 0 | 0 | 0 | 1/iter | None |
-| 3 | O(n) | 0 | 1 | 0 | 1/iter | Low |
-| 4 | O(n²) | 0 | 0 | 0 | 1/iter | Low (BLAS) |
-| 5 | **O(n³)×L** | 0 | 0 | 0 | 0-1/iter | Low (LAPACK ldl/chol) |
-| 6a | O(1) | 0 | 0 | 0 | 1/iter | None |
-| 6b | O(n³)×R | R | R | 0 | rare | Low |
-| 7a | O(n) | 0 | 0 | 0 | 1/iter | **Medium** (tight loop) |
-| 7b | O(n) | 0 | 0 | 0 | once | Low |
-| 8a | O(n³) | 0 | 0 | 0 | once | Low (LAPACK QR) |
-| 8b | O(n·d) | 0 | 0 | 0 | 2/iter | Low (BLAS) |
-| 8c | O(m³) | 0 | 0 | 0 | rare | Low (LAPACK) |
+| Algorithm | Operations | f calls | g calls | H calls | Hv calls | Frequency | C++ Benefit |
+|-----------|------------|---------|---------|---------|----------|-----------|-------------|
+| 0 | O(n) | 0 | 0 | 0 | 0 | 1/iter | Low (vectorized) |
+| 1 | *orchestration* | 1-2 | 1 | 0-1 | 0 | — | Low |
+| 1a | **O(n³)** | 1 | 0 | 0 | 0 | 0-1/iter | **Medium** (Gershgorin loop) |
+| 2a | O(1) | 0 | 0 | 0 | 0 | 1/iter | None |
+| 2b | O(1) | 0 | 0 | 0 | 0 | 1/iter | None |
+| 3 | O(n) | 0 | 1 | 0 | 0 | 1/iter | Low |
+| 4 | O(n²) | 0 | 0 | 0 | 0 | 1/iter | Low (BLAS) |
+| 5a | **O(n³)+O(n²·L)** | 0 | 0 | 0 | 0 | 0-1/iter | Low (LAPACK eigen) |
+| 5b | **O(n·J·m)** | 0 | 0 | 0 | J | 0-1/iter | **Medium** (CG loop, shift management) |
+| 6a | O(1) | 0 | 0 | 0 | 0 | 1/iter | None |
+| 6b | O(n³)×R | R | R | 0 | 0 | rare | Low |
+| 7a | O(n) | 0 | 0 | 0 | 0 | 1/iter | **Medium** (tight loop) |
+| 7b | O(n) | 0 | 0 | 0 | 0 | once | Low |
+| 8a | O(n³) | 0 | 0 | 0 | 0 | once | Low (LAPACK QR) |
+| 8b | O(n·d) | 0 | 0 | 0 | 0 | 2/iter | Low (BLAS) |
+| 8c | O(m³) | 0 | 0 | 0 | 0 | rare | Low (LAPACK) |
 
 **Legend:**
 
-- **L** = λ iterations in Cholesky solver (typically 3-10)
+- **L** = λ iterations in secular equation (typically 3-10)
+- **J** = CG iterations in ARCqK (problem-dependent, typically 5-50)
+- **m** = number of shifts in ARCqK (typically 61)
 - **R** = NaN retries (typically 0-3)
 - **d** = n - rank(A), reduced dimension for linear equality constraints
-- **m** = number of linear equality constraints
-- **f/g/H calls** = calls to user-provided objective, gradient, Hessian functions
+- **f/g/H/Hv calls** = calls to user-provided objective, gradient, Hessian, or Hessian-vector product functions
 
 **C++ Benefit Assessment:**
 
 | Rating | Meaning | Examples |
 |--------|---------|----------|
 | **None** | O(1) operations, no loops | 2a, 2b, 6a |
-| **Low** | Already uses BLAS/LAPACK or simple vectorized ops | 0, 3, 4, 5, 8a-c |
-| **Medium** | Tight loops over n elements, not BLAS-able | 1a (Gershgorin), 7a (bounds) |
+| **Low** | Already uses BLAS/LAPACK or simple vectorized ops | 0, 3, 4, 5a, 8a-c |
+| **Medium** | Tight loops over n elements, complex logic, or shift management | 1a (Gershgorin), 5b (CG+shifts), 7a (bounds) |
 | **High** | Would require many R iterations | *None in current design* |
 
-**Key Insight**: The expensive O(n³) operations (LDL/Cholesky in 5, QR in 8a) already call LAPACK through R's `fastmatrix::ldl()`, `chol()`, and `qr()` functions. C++ would not significantly improve these.
+**Key Insights:**
 
-**Where C++ helps most:**
+1. **Algorithm 5a (Eigendecomposition)**: The expensive O(n³) eigendecomposition already calls LAPACK through R's `eigen()`. The secular iteration is O(n²·L) but L is small (3-10). **C++ benefit: Low**.
 
-1. **Gershgorin bound (Algorithm 1a)**: O(n²/2) loop over matrix elements
-2. **Box constraint truncation (Algorithm 7a)**: O(n) loop with conditionals
+2. **Algorithm 5b (ARCqK)**: Each CG iteration involves:
+   - One Hessian-vector product (user-provided, not our bottleneck)
+   - O(m) scalar operations per shift (m = 61 typical)
+   - Shift management logic (mark indefinite, check convergence, etc.)
+   - Total: O(J·n·m) where J = CG iterations (5-50 typical)
 
-These are candidates for Rcpp if profiling shows them as bottlenecks.
+   The shift management loop (m = 61 systems) with branching logic (indefinite detection, convergence checks) is not BLAS-able and could benefit from C++. **C++ benefit: Medium**.
+
+3. **Where C++ helps most** (ranked by potential impact):
+   - **Algorithm 5b (ARCqK shift loop)**: 61 shifts × J CG iterations with branching logic
+   - **Algorithm 1a (Gershgorin)**: O(n²/2) tight loop over matrix elements
+   - **Algorithm 7a (Box constraints)**: O(n) loop with conditionals
+
+**Implementation Strategy:**
+
+- **Phase 1 (Pure R)**: Implement both 5a and 5b in R. Use 5a (eigendecomposition) as default for n ≤ 500.
+- **Phase 2 (Profile-guided)**: Profile on target problems. If 5b shift management dominates runtime, port to Rcpp.
+- **Phase 3 (Optimization)**: Consider Rcpp for 1a and 7a only if profiling identifies them as bottlenecks.
 
 ## Notation
 
@@ -488,8 +505,8 @@ PROCEDURE:
        [If prev_rejected: Newton already failed with this H_k, skip]
 
     4. CUBIC SUBPROBLEM (Newton failed, rejected, or quasi-Newton):
-       (s_k, λ_k) ← solve_cubic_modified_cholesky(g_k, H_k, σ_k, tol_lambda, max_iter_lambda)
-       [Algorithm 5; handles both PD and indefinite H via mchol]
+       (s_k, λ_k) ← solve_cubic_subproblem(g_k, H_k, σ_k, cubic_solver)
+       [Algorithm 5a (eigendecomposition) or 5b (ARCqK) based on control$cubic_solver]
 
     5. EVALUATE TRIAL POINT:
        x_trial ← x_k + s_k
@@ -862,129 +879,332 @@ PROCEDURE:
 
 # Cubic Subproblem Solver
 
-The cubic subproblem $\min_s m_k(s)$ is the computational core of ARC. We use LDL factorization (`fastmatrix::ldl`) to estimate the minimum eigenvalue shift needed, then iterate on the secular equation to find the optimal regularization multiplier.
+The cubic subproblem $\min_s m_k(s)$ is the computational core of ARC. arcopt provides two solver options optimized for different problem scales and structures.
 
-*Cross-reference: See literature-review.qmd Section 5.2 for handling indefinite Hessians.*
+*Cross-reference: See literature-review.qmd §sec-cubic-subproblem for detailed comparison, hard-case discussion, and theoretical background.*
 
-## Algorithm 5: Modified Cholesky Cubic Solver
+## Overview: Two Solver Approaches
 
-The key insight is that LDL decomposition gives diagonal elements that approximate eigenvalue information. When any diagonal element is negative, the matrix is indefinite. The minimum diagonal gives a lower bound on the shift needed.
+arcopt offers two cubic subproblem solvers that users can select via `control$cubic_solver`:
+
+| Solver | Best For | Complexity | Key Advantage |
+|--------|----------|------------|---------------|
+| **"eigen"** (5a) | Dense H, n ≤ 500 | O(n³) | Exact eigenvalues, clean hard-case handling |
+| **"cg"** (5b) | Sparse H, n > 500, or Hv products only | O(n·J·m) | Scalable, matrix-free, automatic negative curvature detection |
+
+**Default selection** (when `cubic_solver = "auto"`):
+- If n ≤ 500 and full Hessian available: use **eigendecomposition (5a)**
+- If n > 500 or only Hessian-vector products available: use **ARCqK (5b)**
+
+### The Secular Equation
+
+Both solvers work by finding the optimal regularization multiplier $\lambda$ that satisfies:
+
+$$\phi(\lambda) = \|s(\lambda)\| - \frac{\lambda}{\sigma} = 0$$
+
+where $s(\lambda) = -(H + \lambda I)^{-1}g$ is the regularized Newton step.
+
+**Key properties:**
+- $\phi(\lambda) \to +\infty$ as $\lambda \to -\lambda_{\min}^+$ (smallest eigenvalue of H)
+- $\phi(\lambda) \to -\infty$ as $\lambda \to +\infty$
+- $\phi$ is strictly decreasing for $\lambda > -\lambda_{\min}$
+- Unique root exists in $(\max(0, -\lambda_{\min}), +\infty)$ in the **easy case**
+
+**Hard case exception:** When $\lambda_{\min}(H) < 0$ AND $g \perp v_{\min}$ (gradient orthogonal to the smallest eigenvector), there is no root in the valid interval. The optimal solution requires setting $\lambda^* = -\lambda_{\min}$ and adding a component along $v_{\min}$ to reach the target norm.
+
+## Algorithm 5a: Eigendecomposition-Based Cubic Solver
+
+This approach computes the full eigendecomposition $H = Q \Lambda Q^T$ and solves the secular equation in spectral coordinates. It provides exact eigenvalues for hard-case detection and works cleanly with indefinite Hessians.
+
+**When to use:** Small-to-medium dense problems (n ≤ 500), analytic or finite-difference Hessians, or when exact eigenvalue information is desired for diagnostics.
 
 ```
-ALGORITHM 5: Modified Cholesky Cubic Solver
+ALGORITHM 5a: Eigendecomposition-Based Cubic Solver
 ─────────────────────────────────────────────────────────────────────
 
 INPUT:
-  g           Gradient
-  H           Hessian (may be positive definite or indefinite)
-  σ           Regularization parameter
-  tol_lambda  Convergence tolerance for λ iteration (e.g., 1e-10)
-  max_iter    Maximum λ iterations (e.g., 50)
-  max_chol_retries  Maximum Cholesky retry attempts (e.g., 5)
+  g           Gradient vector (length n)
+  H           Hessian matrix (n × n, may be indefinite)
+  σ           Regularization parameter (> 0)
+  tol_lambda  Secular equation tolerance (e.g., 1e-10)
+  tol_hard    Hard-case detection threshold (e.g., 1e-8)
+  max_iter    Maximum secular iterations (e.g., 50)
 
 OUTPUT:
   s           Solution to cubic subproblem
   λ           Final regularization multiplier
   converged   TRUE if secular equation converged
+  case_type   "easy", "hard", or "zero_gradient"
 
 PROCEDURE:
-  0. HANDLE ZERO GRADIENT (early return):
+  0. HANDLE ZERO GRADIENT:
      IF ||g|| < machine_epsilon THEN
-       RETURN (s = 0, λ = 0, converged = TRUE)
+       RETURN (s = 0, λ = 0, converged = TRUE, case_type = "zero_gradient")
      END IF
 
-  1. LDL FACTORIZATION FOR SHIFT ESTIMATION:
-     (L, D, _) ← ldl(H)
-     [H = L D L^T where D is diagonal]
-     λ_lower ← max(0, -min(diag(D)))
-     [If min(D) < 0, H is indefinite and needs shift ≥ |min(D)|]
+  1. EIGENDECOMPOSITION:
+     (Λ, Q) ← eigen(H)    [Λ = diag(λ₁, ..., λₙ), λ₁ ≤ ... ≤ λₙ]
+     g̃ ← Q^T g           [transform gradient to spectral coordinates]
 
-  2. COMPUTE INITIAL SHIFT WITH ROBUST BUFFER:
-     sqrt_eps ← sqrt(machine_epsilon)    [≈ 1.49e-8]
-     ε ← max(sqrt_eps, sqrt_eps × λ_lower)
-     λ ← λ_lower + ε
-     [Buffer ensures H + λI is strictly PD, not just semi-definite]
+  2. DETERMINE LOWER BOUND:
+     λ_lower ← max(0, -λ₁)
+     [If λ₁ < 0, need shift ≥ -λ₁ to ensure H + λI ≻ 0]
 
-  3. INITIAL CHOLESKY WITH RETRY:
-     L_λ ← NULL
-     FOR attempt = 1 TO max_chol_retries DO
-       L_λ ← TRY chol(H + λ I)
-       IF L_λ succeeded THEN BREAK END IF
-       λ ← λ × 2    [double shift and retry]
-     END FOR
-     IF L_λ = NULL THEN
-       ERROR("Failed to compute Cholesky factorization")
+  3. CHECK FOR HARD CASE:
+     IF λ₁ < 0 AND |g̃₁| < tol_hard × ||g|| THEN
+       [HARD CASE: g nearly orthogonal to smallest eigenvector]
+       λ* ← -λ₁
+       s̃ ← zeros(n)
+
+       [Compute s̃ᵢ = -g̃ᵢ/(λᵢ + λ*) for i where λᵢ + λ* is not too small]
+       FOR i = 2 TO n DO
+         IF |λᵢ + λ*| > machine_epsilon THEN
+           s̃[i] ← -g̃[i] / (λᵢ + λ*)
+         ELSE
+           s̃[i] ← 0
+         END IF
+       END FOR
+
+       [Add component along v₁ to satisfy secular equation]
+       s_partial_norm ← ||s̃[2:n]||
+       target_norm ← λ* / σ
+       IF target_norm² > s_partial_norm² THEN
+         τ ← sqrt(target_norm² - s_partial_norm²)
+         s̃[1] ← τ    [or -τ, either direction works]
+       ELSE
+         s̃[1] ← 0
+       END IF
+
+       s ← Q s̃    [transform back to original coordinates]
+       RETURN (s, λ*, converged = TRUE, case_type = "hard")
      END IF
 
-  4. INITIAL SOLVE:
-     s ← -L_λ^{-T} L_λ^{-1} g    [forward/backward substitution]
-
-  5. ITERATE (secular equation):
+  4. EASY CASE: SECULAR EQUATION ITERATION
+     [Initialize λ > λ_lower to ensure positive definiteness]
+     λ ← λ_lower + 0.1 × max(1, |λ_lower|)
      converged ← FALSE
-     FOR iter = 1 TO max_iter DO
-       [Secular equation: find λ such that ||s(λ)|| = λ/σ]
-       φ ← ||s|| - λ/σ
 
+     FOR iter = 1 TO max_iter DO
+       [Compute step in spectral coordinates: s̃ᵢ = -g̃ᵢ/(λᵢ + λ)]
+       FOR i = 1 TO n DO
+         IF |λᵢ + λ| > machine_epsilon THEN
+           s̃[i] ← -g̃[i] / (λᵢ + λ)
+         ELSE
+           s̃[i] ← 0    [avoid division by near-zero]
+         END IF
+       END FOR
+
+       s_norm ← ||s̃||
+
+       [Check for numerical issues]
+       IF NOT is_finite(s_norm) OR s_norm < machine_epsilon THEN
+         BREAK    [numerical breakdown, use current s̃]
+       END IF
+
+       [Secular equation residual]
+       φ ← s_norm - λ/σ
+
+       IF NOT is_finite(φ) THEN
+         BREAK    [numerical instability]
+       END IF
+
+       [Check convergence]
        IF |φ| < tol_lambda × max(1, λ/σ) THEN
          converged ← TRUE
          BREAK
        END IF
 
-       [Newton update on secular equation]
-       [φ'(λ) = -s^T (H + λI)^{-1} s / ||s|| - 1/σ]
-       w ← L_λ^{-T} s             [solve L_λ^T w = s]
-       φ_prime ← -||w||² / ||s|| - 1/σ
-
-       λ_new ← λ - φ / φ_prime
-       λ_new ← max(λ_new, λ_lower)    [stay in valid region]
-
-       [Recompute L and s for new λ with retry on failure]
-       chol_success ← FALSE
-       FOR chol_attempt = 1 TO max_chol_retries DO
-         L_new ← TRY chol(H + λ_new I)
-         IF L_new succeeded THEN
-           L_λ ← L_new
-           chol_success ← TRUE
-           BREAK
-         END IF
-         λ_new ← λ_new × 2    [double shift and retry]
+       [Newton step on φ(λ)]
+       [φ'(λ) = -Σᵢ s̃ᵢ²/(λᵢ + λ) / s_norm - 1/σ]
+       sum_term ← 0
+       FOR i = 1 TO n DO
+         sum_term ← sum_term + s̃[i]² / (λᵢ + λ)
        END FOR
-       IF NOT chol_success THEN
-         BREAK    [use current solution]
+       φ_prime ← -sum_term / s_norm - 1/σ
+
+       IF NOT is_finite(φ_prime) THEN
+         BREAK    [numerical instability]
        END IF
 
-       s ← -L_λ^{-T} L_λ^{-1} g
-       λ ← λ_new
+       λ_new ← λ - φ / φ_prime
+       λ ← max(λ_new, λ_lower + machine_epsilon)
      END FOR
 
-  6. COMPUTE PREDICTED REDUCTION:
+     s ← Q s̃    [transform back to original coordinates]
+
+  5. COMPUTE PREDICTED REDUCTION:
      pred_reduction ← -g^T s - ½ s^T H s - (σ/3) ||s||³
 
-  RETURN (s, λ, pred_reduction, converged)
+  RETURN (s, λ, pred_reduction, converged, case_type = "easy")
 
 NOTES:
-  - LDL is called once at O(n³); each λ iteration is also O(n³)
-  - Typically converges in 3-10 iterations
-  - Zero gradient returns immediately (optimal step is s = 0)
-  - Retry logic handles edge cases where initial shift is insufficient
-  - sqrt(machine_epsilon) buffer prevents near-singular regularized Hessians
+  - Eigendecomposition is O(n³) via LAPACK
+  - Secular iteration typically converges in 3-5 iterations
+  - Hard case is rare in practice but must be handled correctly
+  - Sign choice for τ doesn't matter (both directions yield valid solutions)
+  - For diagnostics: return eigenvalue spectrum in trace mode
 ```
 
-## The Secular Equation
+## Algorithm 5b: ARCqK Multi-Shift Cubic Solver
 
-The secular equation $\phi(\lambda) = 0$ arises from the optimality condition. Geometrically, it finds where the regularized Newton step has the right norm:
+This approach solves multiple shifted systems $(H + \lambda_i I)d = -g$ simultaneously using CG-Lanczos with a single Hessian-vector product per iteration. Negative curvature is automatically detected when $\gamma_j < 0$ during CG, allowing early termination of inadequate shifts.
 
-$$\phi(\lambda) = \|s(\lambda)\| - \frac{\lambda}{\sigma} = 0$$
+**When to use:** Large-scale problems (n > 500), sparse Hessians, or when only Hessian-vector products are available (e.g., automatic differentiation, matrix-free methods).
 
-where $s(\lambda) = -(H + \lambda I)^{-1}g$.
+```
+ALGORITHM 5b: ARCqK Multi-Shift Cubic Solver
+─────────────────────────────────────────────────────────────────────
 
-**Properties:**
-- $\phi(\lambda) \to +\infty$ as $\lambda \to -\lambda_{\min}^+$ (smallest eigenvalue)
-- $\phi(\lambda) \to -\infty$ as $\lambda \to +\infty$
-- $\phi$ is strictly decreasing for $\lambda > -\lambda_{\min}$
-- Unique root exists in $(\max(0, -\lambda_{\min}), +\infty)$
+INPUT:
+  g           Gradient vector
+  Hv_func     Function computing Hessian-vector products: Hv_func(v) → Hv
+  σ           Regularization parameter
+  ψ           Shift spacing ratio (e.g., 10^(1/2) ≈ 3.16)
+  e_L         Minimum shift exponent (e.g., -10 → λ_min = 10^(-10))
+  e_U         Maximum shift exponent (e.g., 20 → λ_max = 10^20)
+  ζ           Residual tolerance exponent (e.g., 0.5)
+  ξ           Residual tolerance constant (e.g., 1e-6)
+  max_cg_iter Maximum CG iterations (e.g., min(100, 2n))
 
-**LDL advantage:** Instead of computing eigenvalues to find $\lambda_{\min}$, we use LDL decomposition which gives diagonal elements approximating eigenvalue information. The lower bound $\lambda_{\text{lower}} = \max(0, -\min(D))$ ensures we start with a shift large enough to make the regularized Hessian positive definite.
+OUTPUT:
+  s           Solution (step from best shift)
+  λ           Selected shift
+  converged   TRUE if CG converged for selected shift
+
+PROCEDURE:
+  0. HANDLE ZERO GRADIENT:
+     IF ||g|| < machine_epsilon THEN
+       RETURN (s = 0, λ = 0, converged = TRUE)
+     END IF
+
+  1. DISCRETIZE SHIFTS:
+     m ← ceil((e_U - e_L) / log₁₀(ψ))
+     λ₀ ← 10^e_L
+     FOR i = 0 TO m DO
+       shifts[i] ← λ₀ × ψ^i
+       active[i] ← TRUE
+     END FOR
+
+  2. INITIALIZE CG-LANCZOS:
+     x⁽ⁱ⁾ ← 0 for all i    [m+1 solution vectors]
+     μ₀ ← ||g||
+     v₀ ← g / μ₀           [first Lanczos vector]
+     p⁽ⁱ⁾ ← -g for all i   [m+1 search directions, negative for minimization]
+     σ⁽ⁱ⁾ ← μ₀ for all i    [residual norms]
+     π⁽ⁱ⁾ ← μ₀² for all i   [||p||² values]
+     v₋₁ ← 0
+     ω₋₁ ← 0, γ₋₁ ← 1
+
+  3. CG-LANCZOS ITERATION:
+     FOR j = 0 TO max_cg_iter DO
+       [=== LANCZOS PART (shift-independent) ===]
+       Hvⱼ ← Hv_func(vⱼ)              [single Hessian-vector product]
+       δⱼ ← vⱼ^T Hvⱼ
+       temp ← Hvⱼ - δⱼ vⱼ - μⱼ v_{j-1}
+       μⱼ₊₁ ← ||temp||
+       IF μⱼ₊₁ < machine_epsilon THEN BREAK END IF    [Lanczos breakdown]
+       vⱼ₊₁ ← temp / μⱼ₊₁
+
+       [=== CG PART (for each active shift) ===]
+       any_active ← FALSE
+       FOR i = 0 TO m DO
+         IF NOT active[i] THEN CONTINUE END IF
+
+         δⱼ⁽ⁱ⁾ ← δⱼ + shifts[i]
+         γⱼ⁽ⁱ⁾ ← 1 / (δⱼ⁽ⁱ⁾ - ωⱼ₋₁⁽ⁱ⁾ / γⱼ₋₁⁽ⁱ⁾)
+
+         [NEGATIVE CURVATURE CHECK]
+         IF γⱼ⁽ⁱ⁾ < 0 THEN
+           active[i] ← FALSE
+           indefinite_count ← indefinite_count + 1
+           CONTINUE
+         END IF
+
+         ωⱼ⁽ⁱ⁾ ← (μⱼ₊₁ × γⱼ⁽ⁱ⁾)²
+         σⱼ₊₁⁽ⁱ⁾ ← -μⱼ₊₁ × γⱼ⁽ⁱ⁾ × σⱼ⁽ⁱ⁾
+         xⱼ₊₁⁽ⁱ⁾ ← xⱼ⁽ⁱ⁾ + γⱼ⁽ⁱ⁾ × pⱼ⁽ⁱ⁾
+         pⱼ₊₁⁽ⁱ⁾ ← σⱼ₊₁⁽ⁱ⁾ × vⱼ₊₁ + ωⱼ⁽ⁱ⁾ × pⱼ⁽ⁱ⁾
+         πⱼ₊₁⁽ⁱ⁾ ← σⱼ₊₁⁽ⁱ⁾² + ωⱼ⁽ⁱ⁾² × πⱼ⁽ⁱ⁾
+
+         [CONVERGENCE CHECK]
+         tol_i ← ξ × min(||g||, ||xⱼ₊₁⁽ⁱ⁾||)^(1+ζ)
+         IF |σⱼ₊₁⁽ⁱ⁾| ≤ tol_i THEN
+           converged[i] ← TRUE
+         END IF
+
+         any_active ← TRUE
+       END FOR
+
+       IF NOT any_active THEN BREAK END IF    [all systems terminated]
+     END FOR
+
+  4. SELECT BEST SHIFT:
+     [Find smallest non-indefinite shift index]
+     i_plus ← min{i : active[i] OR converged[i]}
+
+     [Among valid shifts, find closest to satisfying secular equation]
+     best_i ← i_plus
+     best_error ← ∞
+     FOR i = i_plus TO m DO
+       IF active[i] OR converged[i] THEN
+         error ← |σ × ||x⁽ⁱ⁾|| - shifts[i]|
+         IF error < best_error THEN
+           best_error ← error
+           best_i ← i
+         END IF
+       END IF
+     END FOR
+
+     s ← x⁽ᵇᵉˢᵗ_ⁱ⁾
+     λ ← shifts[best_i]
+
+  5. COMPUTE PREDICTED REDUCTION:
+     Hs ← Hv_func(s)
+     pred_reduction ← -g^T s - ½ s^T Hs - (σ/3) ||s||³
+
+  RETURN (s, λ, pred_reduction, converged[best_i])
+
+NOTES:
+  - Single Hessian-vector product per CG iteration (independent of m)
+  - O(m × n) storage for solutions and search directions
+  - Typical parameters: ψ = 10^(1/2), e_L = -10, e_U = 20 → m = 61 shifts
+  - Negative curvature detected automatically via sign of γⱼ
+  - No explicit eigenvalue computation required
+  - Reuse of solutions: if iteration unsuccessful, try larger shift (already computed)
+```
+
+## Solver Selection and Parameters
+
+**Control parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `cubic_solver` | "auto" | "auto", "eigen", or "cg" |
+| `cubic_solver_threshold` | 500 | Problem size threshold for auto selection |
+| `tol_lambda` | $10^{-10}$ | Secular equation tolerance (both solvers) |
+| `max_iter_lambda` | 50 | Max iterations (eigendecomposition) |
+| `max_cg_iter` | `min(100, 2n)` | Max CG iterations (ARCqK) |
+| `arcqk_psi` | $10^{1/2}$ | Shift spacing ratio |
+| `arcqk_e_lower` | -10 | Minimum shift exponent |
+| `arcqk_e_upper` | 20 | Maximum shift exponent |
+| `arcqk_zeta` | 0.5 | Residual tolerance exponent |
+| `arcqk_xi` | $10^{-6}$ | Residual tolerance constant |
+
+**User interface:**
+
+```r
+# Default: automatic selection
+result <- arcopt(x0, fn, gr, hess)
+
+# Force eigendecomposition (good for n ≤ 500, dense H)
+result <- arcopt(x0, fn, gr, hess,
+                 control = list(cubic_solver = "eigen"))
+
+# Force ARCqK (good for n > 500 or sparse H)
+# Requires Hessian-vector product function
+result <- arcopt(x0, fn, gr, hess_vec = Hv_func,
+                 control = list(cubic_solver = "cg"))
+```
 
 # Robustness Safeguards
 
@@ -1369,8 +1589,16 @@ x* ← transform_to_x_space(z*, x_p, Z)
 | `sigma_max` | $10^{12}$ | Core ARC | Upper bound |
 | `use_interpolation` | FALSE | CGT | Enable interpolation variant |
 | **Cubic Solver** ||||
-| `tol_lambda` | $10^{-10}$ | Algorithm 5 | λ iteration convergence tolerance |
-| `max_iter_lambda` | 100 | Algorithm 5 | Maximum λ iterations |
+| `cubic_solver` | "auto" | Algorithm 5a/5b | Cubic solver: "auto", "eigen", or "cg" |
+| `cubic_solver_threshold` | 500 | Algorithm 5a/5b | Auto selection size threshold |
+| `tol_lambda` | $10^{-10}$ | Algorithm 5a/5b | Secular equation tolerance |
+| `max_iter_lambda` | 50 | Algorithm 5a | Maximum iterations (eigendecomposition) |
+| `max_cg_iter` | `min(100, 2n)` | Algorithm 5b | Maximum CG iterations (ARCqK) |
+| `arcqk_psi` | $10^{1/2}$ | Algorithm 5b | Shift spacing ratio |
+| `arcqk_e_lower` | -10 | Algorithm 5b | Minimum shift exponent |
+| `arcqk_e_upper` | 20 | Algorithm 5b | Maximum shift exponent |
+| `arcqk_zeta` | 0.5 | Algorithm 5b | Residual tolerance exponent |
+| `arcqk_xi` | $10^{-6}$ | Algorithm 5b | Residual tolerance constant |
 | **Newton Step** ||||
 | `try_newton` | TRUE | Core ARC | Attempt Newton before cubic |
 | `c_armijo` | $10^{-4}$ | Newton | Armijo sufficient decrease |
@@ -1405,10 +1633,9 @@ This section documents significant changes made to the pseudocode based on imple
 
 | Date | Algorithm | Change | Problem | Rationale |
 |------|-----------|--------|---------|-----------|
-| 2025-01 | Algorithm 5 | Added zero gradient early return (Step 0) | When gradient is exactly zero, secular equation iteration fails to converge because $\|s\| = 0$ cannot satisfy $\|s\| = \lambda/\sigma$ for any $\lambda > 0$ | Zero gradient implies optimality; returning $s = 0$, $\lambda = 0$ immediately is mathematically correct and avoids unnecessary computation |
-| 2025-01 | Algorithm 5 | Changed buffer from $\varepsilon = 10^{-12}$ to $\sqrt{\text{machine\_epsilon}}$ (Step 2) | With buffer $10^{-12}$, when $\lambda_{\text{lower}} = -\lambda_{\min}(H)$ exactly, the regularized Hessian $H + \lambda I$ has a near-zero eigenvalue, causing Cholesky to fail with "leading minor not positive" | $\sqrt{\text{machine\_epsilon}} \approx 1.49 \times 10^{-8}$ is the standard numerical tolerance for detecting near-singularity; ensures $H + \lambda I$ is strictly positive definite, not just semi-definite |
-| 2025-01 | Algorithm 5 | Added Cholesky retry logic with exponential backoff (Steps 3, 5) | Even with sqrt(eps) buffer, edge cases with ill-conditioned Hessians can still cause Cholesky failure | Retry with doubled $\lambda$ (up to 5 attempts) provides graceful degradation; larger regularization always makes the problem more well-conditioned |
-| 2025-01 | Algorithm 5 | Changed from `mchol` to `ldl` for shift estimation (Step 1) | Implementation uses `fastmatrix::ldl()` which directly provides diagonal D for eigenvalue estimation | LDL decomposition gives $\lambda_{\text{lower}} = \max(0, -\min(D))$ directly; simpler than extracting perturbation from modified Cholesky |
+| 2025-01 | Algorithm 5 → 5a/5b | Replaced single modified Cholesky solver with two distinct solvers: eigendecomposition (5a) and ARCqK multi-shift (5b) | Modified Cholesky approach using LDL diagonal approximation does not handle hard case (g ⊥ smallest eigenvector); also not scalable to large problems; benchmark tests showed 4 Dixon-Price cases converged to saddle points | Eigendecomposition provides exact eigenvalues for hard-case detection and clean indefinite Hessian handling; ARCqK enables scalability to large problems via CG-Lanczos with automatic negative curvature detection; both approaches are well-validated in literature (Cartis et al. 2011; Dussault et al. 2024) |
+| 2025-01 | Algorithm 5a | Added hard-case detection and handling (Step 3) | When $\lambda_{\min}(H) < 0$ AND $g \perp v_{\min}$, secular equation has no root in valid interval; old approach would fail or give suboptimal solution | Hard case requires setting $\lambda^* = -\lambda_{\min}$ and adding component along $v_{\min}$ to satisfy secular equation; ensures global optimality |
+| 2025-01 | Algorithm 5a/5b | Added zero gradient early return (Step 0) | When gradient is exactly zero, secular equation iteration fails to converge because $\|s\| = 0$ cannot satisfy $\|s\| = \lambda/\sigma$ for any $\lambda > 0$ | Zero gradient implies optimality; returning $s = 0$, $\lambda = 0$ immediately is mathematically correct and avoids unnecessary computation |
 
 ## Benchmark Validation
 
