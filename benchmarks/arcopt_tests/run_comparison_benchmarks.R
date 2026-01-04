@@ -42,9 +42,7 @@ arcopt_control <- list(
   trace = FALSE,
   maxit = 1000,
   gtol_abs = 1e-6,
-  use_momentum = TRUE,
-  momentum_c1 = 1.0,
-  momentum_c2 = 1.0
+  use_momentum = FALSE
 )
 
 trust_iterlim <- 1000
