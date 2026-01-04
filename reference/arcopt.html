@@ -59,6 +59,7 @@ and indefinite Hessian problems common in statistical applications.</p>
 <span>  <span class="va">fn</span>,</span>
 <span>  <span class="va">gr</span>,</span>
 <span>  hess <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  hess_vec <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  lower <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/rep.html" class="external-link">rep</a></span><span class="op">(</span><span class="op">-</span><span class="cn">Inf</span>, <span class="fu"><a href="https://rdrr.io/r/base/length.html" class="external-link">length</a></span><span class="op">(</span><span class="va">x0</span><span class="op">)</span><span class="op">)</span>,</span>
 <span>  upper <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/rep.html" class="external-link">rep</a></span><span class="op">(</span><span class="cn">Inf</span>, <span class="fu"><a href="https://rdrr.io/r/base/length.html" class="external-link">length</a></span><span class="op">(</span><span class="va">x0</span><span class="op">)</span><span class="op">)</span>,</span>
 <span>  control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span><span class="op">)</span></span>
@@ -85,8 +86,14 @@ of length Q and return a numeric vector of length Q. Required.</p></dd>
 
 <dt id="arg-hess">hess<a class="anchor" aria-label="anchor" href="#arg-hess"></a></dt>
 <dd><p>Function that computes the Hessian matrix. Should take a numeric
-vector of length Q and return a Q×Q symmetric matrix. Required for full ARC;
-if NULL, uses SR1 quasi-Newton approximation (see Details).</p></dd>
+vector of length Q and return a Q×Q symmetric matrix. Either <code>hess</code> or
+<code>hess_vec</code> must be provided.</p></dd>
+
+
+<dt id="arg-hess-vec">hess_vec<a class="anchor" aria-label="anchor" href="#arg-hess-vec"></a></dt>
+<dd><p>Function that computes Hessian-vector products. Should take
+a numeric vector v of length Q and return H*v (length Q). Allows matrix-free
+optimization for large-scale problems. Optional if <code>hess</code> is provided.</p></dd>
 
 
 <dt id="arg-lower">lower<a class="anchor" aria-label="anchor" href="#arg-lower"></a></dt>
@@ -142,6 +149,10 @@ computation.</p>
 <li><p><code>gamma1</code>: Regularization decrease factor (default: 0.5)</p></li>
 <li><p><code>gamma2</code>: Regularization increase factor (default: 2.0)</p></li>
 <li><p><code>use_sr1</code>: Use SR1 quasi-Newton if <code>hess = NULL</code> (default: TRUE)</p></li>
+<li><p><code>cubic_solver</code>: Solver selection: "auto" (recommended), "ldl", "eigen", "cg"
+(default: "auto"). The "cg" solver is <strong>experimental</strong> and may perform poorly
+on small problems; use "eigen" for most applications.</p></li>
+<li><p><code>cubic_solver_threshold</code>: Problem size threshold for auto-selection (default: 500)</p></li>
 <li><p><code>trace</code>: Print iteration progress (default: FALSE)</p></li>
 </ul></div>
 

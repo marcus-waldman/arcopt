@@ -13,6 +13,7 @@ arcopt(
   fn,
   gr,
   hess = NULL,
+  hess_vec = NULL,
   lower = rep(-Inf, length(x0)),
   upper = rep(Inf, length(x0)),
   control = list()
@@ -38,8 +39,14 @@ arcopt(
 - hess:
 
   Function that computes the Hessian matrix. Should take a numeric
-  vector of length Q and return a Q×Q symmetric matrix. Required for
-  full ARC; if NULL, uses SR1 quasi-Newton approximation (see Details).
+  vector of length Q and return a Q×Q symmetric matrix. Either `hess` or
+  `hess_vec` must be provided.
+
+- hess_vec:
+
+  Function that computes Hessian-vector products. Should take a numeric
+  vector v of length Q and return H\*v (length Q). Allows matrix-free
+  optimization for large-scale problems. Optional if `hess` is provided.
 
 - lower:
 
@@ -113,6 +120,14 @@ The `control` list accepts:
 - `gamma2`: Regularization increase factor (default: 2.0)
 
 - `use_sr1`: Use SR1 quasi-Newton if `hess = NULL` (default: TRUE)
+
+- `cubic_solver`: Solver selection: "auto" (recommended), "ldl",
+  "eigen", "cg" (default: "auto"). The "cg" solver is **experimental**
+  and may perform poorly on small problems; use "eigen" for most
+  applications.
+
+- `cubic_solver_threshold`: Problem size threshold for auto-selection
+  (default: 500)
 
 - `trace`: Print iteration progress (default: FALSE)
 

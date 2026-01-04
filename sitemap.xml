@@ -12,9 +12,13 @@
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/check_convergence.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/check_finite.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/detect_stagnation.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/hess_vec_fd.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/index.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/project_to_box.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/solve_cubic_cg.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/solve_cubic_eigen.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/solve_cubic_subproblem.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/solve_cubic_subproblem_dispatch.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/try_newton_step.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/update_sigma_cgt.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/update_sigma_interpolation.html</loc></url>
