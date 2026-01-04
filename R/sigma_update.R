@@ -35,7 +35,10 @@ update_sigma_cgt <- function(sigma_current, rho,
                              gamma2 = 2.0,
                              sigma_min = 1e-16,
                              sigma_max = 1e16) {
-  if (rho >= eta2) {
+  # Handle NaN/Inf rho (treat as unsuccessful)
+  if (!is.finite(rho)) {
+    sigma_new <- min(sigma_max, gamma2 * sigma_current)
+  } else if (rho >= eta2) {
     # Very successful: decrease sigma (trust model more)
     sigma_new <- max(sigma_min, gamma1 * sigma_current)
   } else if (rho >= eta1) {

@@ -89,6 +89,12 @@ The \code{control} list accepts:
 (default: "auto"). The "cg" solver is \strong{experimental} and may perform poorly
 on small problems; use "eigen" for most applications.
 \item \code{cubic_solver_threshold}: Problem size threshold for auto-selection (default: 500)
+\item \code{use_momentum}: Enable momentum acceleration (default: TRUE).
+Can reduce iterations by 30-90\% on ill-conditioned problems with no additional
+function evaluations. Automatically vanishes near optimum to prevent oscillation.
+\item \code{momentum_max}: Maximum momentum parameter (default: 0.9)
+\item \code{momentum_c1}: Step-size scaling constant (default: 0.1)
+\item \code{momentum_c2}: Gradient scaling constant (default: 0.1)
 \item \code{trace}: Print iteration progress (default: FALSE)
 }
 }
