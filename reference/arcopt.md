@@ -117,7 +117,11 @@ The `control` list accepts:
 
 - `use_momentum`: Enable momentum acceleration (default: FALSE).
   Implements Gao et al. (2022) ARCm with recursive momentum and
-  monotonicity. Can reduce iterations on ill-conditioned problems.
+  bisection search for monotonicity. **Only recommended for known
+  ill-conditioned problems** - on well-conditioned problems, the
+  bisection overhead may negate iteration savings. Empirically shows
+  mixed results: can dramatically reduce iterations on some problems
+  while increasing them on others.
 
 - `momentum_tau`: Maximum momentum parameter (default: 0.5, Gao's τ)
 
