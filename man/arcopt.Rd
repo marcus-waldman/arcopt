@@ -82,8 +82,11 @@ The \code{control} list accepts:
 (default: "auto"). Auto-selection uses eigendecomposition (Algorithm 5a) for
 robust handling of indefinite Hessians and hard cases.
 \item \code{use_momentum}: Enable momentum acceleration (default: FALSE).
-Implements Gao et al. (2022) ARCm with recursive momentum and monotonicity.
-Can reduce iterations on ill-conditioned problems.
+Implements Gao et al. (2022) ARCm with recursive momentum and bisection
+search for monotonicity. \strong{Only recommended for known ill-conditioned
+problems} - on well-conditioned problems, the bisection overhead may
+negate iteration savings. Empirically shows mixed results: can dramatically
+reduce iterations on some problems while increasing them on others.
 \item \code{momentum_tau}: Maximum momentum parameter (default: 0.5, Gao's τ)
 \item \code{momentum_alpha1}: Linear step scaling constant (default: 0.1, Gao's α₁)
 \item \code{momentum_alpha2}: Quadratic step scaling constant (default: 1.0, Gao's α₂)
