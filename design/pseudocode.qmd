@@ -809,22 +809,22 @@ Momentum acceleration is **disabled by default** (`use_momentum = FALSE`) due to
 ## Algorithm 3: ARCm (Momentum-Accelerated ARC)
 
 ```
-ALGORITHM 3: ARCm (Momentum-Accelerated ARC)
+ALGORITHM 3: ARCm (Momentum-Accelerated ARC) - Gao et al. 2022
 ─────────────────────────────────────────────────────────────────────
 
 INPUT:
   x_0           Initial point
   σ_0           Initial regularization
-  β_max         Maximum momentum parameter
-  c_1, c_2      Momentum scaling constants
-  [Standard ARC parameters: η_1, η_2, γ, σ_min, σ_max]
+  τ             Maximum momentum parameter (default: 0.5)
+  α_1, α_2      Momentum scaling constants (default: 0.1, 1.0)
+  [Standard ARC parameters: η_1, η_2, γ_1, γ_2, σ_min, σ_max]
 
 OUTPUT:
   x*            Approximate minimizer
 
 PROCEDURE:
   k ← 0
-  y_0 ← x_0
+  v_{-1} ← 0    [initialize momentum vector]
 
   WHILE NOT converged DO    [see Algorithm 0]
 
@@ -832,36 +832,62 @@ PROCEDURE:
        f_k ← f(x_k), g_k ← ∇f(x_k), H_k ← ∇²f(x_k)
 
     2. SOLVE CUBIC SUBPROBLEM:
-       s_k ← argmin_s m_k(s)
+       s_k ← argmin_s [g_k^T s + (1/2)s^T H_k s + (σ_k/3)||s||³]
 
     3. SET TRIAL POINT:
        y_{k+1} ← x_k + s_k
+       f(y_{k+1}) ← f(y_{k+1})
 
-    4. COMPUTE ρ_k AND UPDATE σ_k:
-       [Standard CGT update - see Algorithm 2a]
+    4. COMPUTE ρ_k:
+       [Standard ratio test - see Algorithm 2a]
 
     5. APPLY MOMENTUM (if step accepted):
        IF ρ_k ≥ η_1 THEN
-         β_k ← min(β_max, c_1/||s_k||, c_2/||g(y_{k+1})||)
-         x_{k+1} ← y_{k+1} + β_k · (y_{k+1} - y_k)
+         [Compute beta upper bound]
+         β_upper ← min{τ, α_1 ||s_k||, α_2 ||s_k||²}
+
+         [Bisection search for β_k satisfying f(z_{k+1}) ≤ f(y_{k+1})]
+         β_k ← bisection_search([0, β_upper], f(y_{k+1}))
+
+         [Update with momentum]
+         v_k ← β_k · v_{k-1} + s_k
+         x_{k+1} ← x_k + v_k
        ELSE
-         x_{k+1} ← x_k          [no momentum on rejected steps]
-         y_{k+1} ← y_k
+         [Rejected step: no update, momentum carries forward]
+         x_{k+1} ← x_k
+         v_k ← v_{k-1}
        END IF
+
+    6. UPDATE σ_k:
+       [Standard CGT update - see Algorithm 2a]
 
     k ← k + 1
   END WHILE
 
   RETURN x_k
+
+─────────────────────────────────────────────────────────────────────
+NOTES:
+
+1. Momentum vector v_k accumulates: v_k = β_k · v_{k-1} + s_k
+   - Far from optimum (||s|| large): β ≈ τ (maximum momentum)
+   - Near optimum (||s|| → 0): β → 0 (preserves second-order convergence)
+
+2. Bisection search ensures monotonicity: f(x_{k+1}) ≤ f(y_{k+1})
+   - This prevents momentum from increasing function value
+   - Typically converges in 5-10 bisection iterations
+
+3. Rejected steps preserve v_k for next iteration
+   - Allows momentum to help recover from over-regularization
 ```
 
 **Momentum Parameters**:
 
 | Parameter | Default | Valid Range | Description |
 |-----------|---------|-------------|-------------|
-| `momentum_max` | 0.9 | $(0, 1)$ | Maximum $\beta_k$ |
-| `momentum_c1` | 0.1 | $(0, \infty)$ | Step-size scaling |
-| `momentum_c2` | 0.1 | $(0, \infty)$ | Gradient scaling |
+| `momentum_tau` | 0.5 | $(0, 1)$ | Maximum $\beta_k$ (Gao's $\tau$) |
+| `momentum_alpha1` | 0.1 | $(0, \infty)$ | Linear step scaling (Gao's $\alpha_1$) |
+| `momentum_alpha2` | 1.0 | $(0, \infty)$ | Quadratic step scaling (Gao's $\alpha_2$) |
 
 # Cubic Subproblem Solver
 

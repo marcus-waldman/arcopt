@@ -82,11 +82,11 @@ The \code{control} list accepts:
 (default: "auto"). Auto-selection uses eigendecomposition (Algorithm 5a) for
 robust handling of indefinite Hessians and hard cases.
 \item \code{use_momentum}: Enable momentum acceleration (default: FALSE).
-When enabled, can help on some ill-conditioned problems but may cause
-oscillation with small momentum coefficients. Not recommended for general use.
-\item \code{momentum_max}: Maximum momentum parameter (default: 0.9)
-\item \code{momentum_c1}: Step-size scaling constant (default: 0.1)
-\item \code{momentum_c2}: Gradient scaling constant (default: 0.1)
+Implements Gao et al. (2022) ARCm with recursive momentum and monotonicity.
+Can reduce iterations on ill-conditioned problems.
+\item \code{momentum_tau}: Maximum momentum parameter (default: 0.5, Gao's τ)
+\item \code{momentum_alpha1}: Linear step scaling constant (default: 0.1, Gao's α₁)
+\item \code{momentum_alpha2}: Quadratic step scaling constant (default: 1.0, Gao's α₂)
 \item \code{trace}: Print iteration progress (default: FALSE)
 }
 }

@@ -44,11 +44,11 @@
 #'   (default: "auto"). Auto-selection uses eigendecomposition (Algorithm 5a) for
 #'   robust handling of indefinite Hessians and hard cases.
 #' * `use_momentum`: Enable momentum acceleration (default: FALSE).
-#'   When enabled, can help on some ill-conditioned problems but may cause
-#'   oscillation with small momentum coefficients. Not recommended for general use.
-#' * `momentum_max`: Maximum momentum parameter (default: 0.9)
-#' * `momentum_c1`: Step-size scaling constant (default: 0.1)
-#' * `momentum_c2`: Gradient scaling constant (default: 0.1)
+#'   Implements Gao et al. (2022) ARCm with recursive momentum and monotonicity.
+#'   Can reduce iterations on ill-conditioned problems.
+#' * `momentum_tau`: Maximum momentum parameter (default: 0.5, Gao's τ)
+#' * `momentum_alpha1`: Linear step scaling constant (default: 0.1, Gao's α₁)
+#' * `momentum_alpha2`: Quadratic step scaling constant (default: 1.0, Gao's α₂)
 #' * `trace`: Print iteration progress (default: FALSE)
 #'
 #' @return A list with components:
@@ -130,9 +130,9 @@ arcopt <- function(x0, fn, gr, hess = NULL,
     gamma2 = 2.0,
     cubic_solver = "auto",
     use_momentum = FALSE,
-    momentum_max = 0.9,
-    momentum_c1 = 0.1,
-    momentum_c2 = 0.1,
+    momentum_tau = 0.5,
+    momentum_alpha1 = 0.1,
+    momentum_alpha2 = 1.0,
     trace = FALSE
   )
 
@@ -154,8 +154,9 @@ arcopt <- function(x0, fn, gr, hess = NULL,
   f_values <- numeric(0)
   already_refreshed <- FALSE
 
-  # Momentum: Track previous trial point (y_k in Algorithm 3)
-  y_prev <- NULL
+  # Momentum state (Gao et al. Algorithm 1)
+  # v_prev initialized to zero vector per Gao: v_{-1} = 0
+  v_prev <- rep(0, length(x0))
 
   # Initial evaluation
   f_current <- fn(x_current)
@@ -293,9 +294,9 @@ arcopt <- function(x0, fn, gr, hess = NULL,
             f_current <- f_new
             g_current <- g_new
 
-            # Reset momentum state after Newton step - if we later fall back
-            # to cubic, momentum should start fresh (no stale direction)
-            y_prev <- NULL
+            # Reset momentum state after Newton step - Newton is optimal for local
+            # quadratic model, so accumulated cubic momentum direction is stale
+            v_prev <- rep(0, length(x_current))
 
             h_current <- hess(x_current)
             hess_evals <- hess_evals + 1
@@ -378,23 +379,71 @@ arcopt <- function(x0, fn, gr, hess = NULL,
           stop("NaN or Inf detected in gradient at accepted point")
         }
 
-        # Apply momentum if enabled
-        if (control$use_momentum && !is.null(y_prev)) {
-          # Compute adaptive momentum parameter (Algorithm 3)
+        # Apply momentum if enabled (Gao et al. Algorithm 1)
+        if (control$use_momentum) {
+          # Compute beta_k upper bound: beta ∈ [0, min{τ, α1||s||, α2||s||²}]
           s_norm <- sqrt(sum(s_current^2))
-          g_norm <- sqrt(sum(g_new^2))
-          beta_k <- min(
-            control$momentum_max,
-            control$momentum_c1 / max(s_norm, .Machine$double.eps),
-            control$momentum_c2 / max(g_norm, .Machine$double.eps)
+          beta_upper <- min(
+            control$momentum_tau,
+            control$momentum_alpha1 * s_norm,
+            control$momentum_alpha2 * s_norm^2
           )
 
-          # Momentum step: x_{k+1} = y_{k+1} + beta_k * (y_{k+1} - y_k)
-          momentum_direction <- y_new - y_prev
-          x_current <- y_new + beta_k * momentum_direction
-          f_current <- fn(x_current)
-          g_current <- gr(x_current)
+          # Initialize with beta=0 fallback (no momentum = just cubic step)
+          v_current <- s_current
+          x_current <- y_new
+          f_current <- f_new
+
+          # Bisection search for largest beta_k satisfying f(x_k + v_k) <= f(y_{k+1})
+          # where v_k = beta * v_{k-1} + s_k
+          f_target <- f_new  # f(y_{k+1}) = f(x_k + s_k)
+
+          # Try beta_upper first (greedy)
+          # v_k = beta * v_{k-1} + s_k, and x_{k+1} = x_k + v_k
+          # Simplified: x_{k+1} = y_{k+1} + beta * v_{k-1} (since y_{k+1} = x_k + s_k)
+          v_trial <- beta_upper * v_prev + s_current
+          z_trial <- y_new + beta_upper * v_prev
+          f_trial <- fn(z_trial)
           fn_evals <- fn_evals + 1
+
+          if (check_finite(f_trial, rep(0, length(z_trial))) && f_trial <= f_target) {
+            # Accept beta_upper
+            v_current <- v_trial
+            x_current <- z_trial
+            f_current <- f_trial
+          } else if (beta_upper > 1e-10) {
+            # Bisection search for valid beta
+            beta_low <- 0
+            beta_high <- beta_upper
+            max_bisect <- 10
+
+            for (i in seq_len(max_bisect)) {
+              beta_mid <- (beta_low + beta_high) / 2
+              v_trial <- beta_mid * v_prev + s_current
+              z_trial <- y_new + beta_mid * v_prev
+              f_trial <- fn(z_trial)
+              fn_evals <- fn_evals + 1
+
+              if (check_finite(f_trial, rep(0, length(z_trial))) && f_trial <= f_target) {
+                # Valid beta found - update best solution
+                beta_low <- beta_mid
+                v_current <- v_trial
+                x_current <- z_trial
+                f_current <- f_trial
+              } else {
+                beta_high <- beta_mid
+              }
+
+              if (beta_high - beta_low < 1e-6) break
+            }
+            # If no valid beta found, we keep the beta=0 fallback initialized above
+          }
+
+          # Update momentum vector for next iteration
+          v_prev <- v_current
+
+          # Evaluate gradient at accepted point
+          g_current <- gr(x_current)
           gr_evals <- gr_evals + 1
         } else {
           # No momentum: x_{k+1} = y_{k+1}
@@ -402,9 +451,6 @@ arcopt <- function(x0, fn, gr, hess = NULL,
           f_current <- f_new
           g_current <- g_new
         }
-
-        # Update y_prev for next iteration
-        y_prev <- y_new
 
         h_current <- hess(x_current)
         hess_evals <- hess_evals + 1
@@ -416,7 +462,8 @@ arcopt <- function(x0, fn, gr, hess = NULL,
         prev_rejected <- FALSE
       } else {
         # Reject step - keep current point, will re-solve with updated sigma
-        # Do NOT update y_prev on rejected steps (Algorithm 3)
+        # IMPORTANT: Do NOT update v_prev on rejected steps (Gao Algorithm 1)
+        # Next iteration will use the SAME v_prev (momentum carries forward unchanged)
         prev_rejected <- TRUE
       }
 
