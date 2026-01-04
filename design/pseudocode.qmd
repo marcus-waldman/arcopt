@@ -632,11 +632,11 @@ PROCEDURE:
   RETURN x_k, f_k, g_k, H_k, converge_info
 ```
 
-## Algorithm 1a: Newton Step with Gershgorin Pre-Check
+## Algorithm 1a: Newton Step
 
-This subroutine attempts a Newton step, using Gershgorin's theorem as a cheap pre-check for positive definiteness before the more expensive Cholesky factorization.
+This subroutine attempts a Newton step using Cholesky factorization to check positive definiteness and solve the Newton system.
 
-*Cross-reference: See literature-review.qmd Section 5.1 for Gershgorin pre-check discussion.*
+**No pre-filtering by σ is required**: The literature shows that Newton steps should be attempted whenever the Hessian appears positive definite, with the ratio test ρₖ determining acceptance. See `literature/consensus_reviews/No explicit σ-threshold for Newton Step.txt` for details.
 
 ```
 ALGORITHM 1a: Try Newton Step
@@ -652,22 +652,16 @@ OUTPUT:
   pred_quad   Predicted reduction from quadratic model
 
 PROCEDURE:
-  1. GERSHGORIN PRE-CHECK:
-     λ_min_bound ← gershgorin_lower_bound(H_k)    [O(n²)]
-     IF λ_min_bound ≤ 0 THEN
-       RETURN (FALSE, NULL, NULL)    [H_k may be indefinite, skip Newton]
-     END IF
-
-  2. ATTEMPT CHOLESKY:
+  1. ATTEMPT CHOLESKY:
      (L, chol_success) ← cholesky(H_k)
      IF NOT chol_success THEN
        RETURN (FALSE, NULL, NULL)    [H_k is indefinite]
      END IF
 
-  3. SOLVE NEWTON SYSTEM:
+  2. SOLVE NEWTON SYSTEM:
      s_newton ← -L^{-T} L^{-1} g_k    [i.e., s = -H_k^{-1} g_k]
 
-  4. COMPUTE PREDICTED REDUCTION (quadratic model):
+  3. COMPUTE PREDICTED REDUCTION (quadratic model):
      [Newton minimizes m_quad(s) = f + g^T s + (1/2) s^T H s]
      pred_quad ← -(g_k^T s_newton + (1/2) s_newton^T H_k s_newton)
 
@@ -677,34 +671,6 @@ PROCEDURE:
      END IF
 
   RETURN (TRUE, s_newton, pred_quad)
-
-
-FUNCTION gershgorin_lower_bound(H):
-  ─────────────────────────────────────────────────────────────────────
-  [Cheap O(n²/2) lower bound on minimum eigenvalue for symmetric H]
-
-  n ← dim(H)
-  row_sums ← zeros(n)
-
-  [Exploit symmetry: traverse upper triangle only]
-  FOR i = 1 TO n DO
-    FOR j = i+1 TO n DO
-      val ← |H_{ij}|
-      row_sums[i] ← row_sums[i] + val
-      row_sums[j] ← row_sums[j] + val    [H_{ji} = H_{ij}]
-    END FOR
-  END FOR
-
-  [Compute minimum Gershgorin lower bound]
-  min_lower ← +∞
-  FOR i = 1 TO n DO
-    lower_i ← H_{ii} - row_sums[i]
-    min_lower ← min(min_lower, lower_i)
-  END FOR
-
-  RETURN min_lower
-
-  [If min_lower > 0, H is guaranteed positive definite (sufficient but not necessary)]
 ```
 
 **Why Newton-First?**

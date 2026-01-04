@@ -2,7 +2,7 @@
 % Please edit documentation in R/newton_step.R
 \name{try_newton_step}
 \alias{try_newton_step}
-\title{Try Newton Step with Gershgorin Check}
+\title{Try Newton Step}
 \usage{
 try_newton_step(g, H)
 }
@@ -19,20 +19,19 @@ List with components:
 }
 \description{
 Attempts to compute and validate a Newton step when the Hessian is positive
-definite. Uses Gershgorin circle theorem for a cheap O(n^2) check before
-attempting Cholesky factorization.
+definite. Uses Cholesky factorization to check positive definiteness and
+solve the Newton system.
 }
 \details{
 The algorithm:
 \enumerate{
-\item Computes Gershgorin lower bound on minimum eigenvalue
-\item If bound <= 0, returns failure (H may be indefinite)
-\item Attempts Cholesky factorization of H
+\item Attempts Cholesky factorization of H (fails if H is indefinite)
 \item If successful, solves H * s = -g for Newton step
+\item Computes predicted reduction from quadratic model
 }
 
-The Gershgorin theorem states that for symmetric matrix H, the minimum
-eigenvalue satisfies: lambda_min >= min over i of (H_ii - sum of abs(H_ij) for j != i).
-If this lower bound is positive, H is guaranteed positive definite.
+No pre-filtering based on sigma is required - the ratio test in the main
+ARC loop naturally determines whether Newton steps are appropriate. See
+literature/consensus_reviews/No explicit σ-threshold for Newton Step.txt
 }
 \keyword{internal}
