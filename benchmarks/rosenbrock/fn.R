@@ -11,8 +11,10 @@
 # Properties:
 #   - Non-convex for d > 2
 #   - Non-separable
-#   - Unimodal
+#   - Unimodal for d = 2, 3 only; has local minima for d >= 4
+#     (See: Shang & Qiu 2006, "A Note on the Extended Rosenbrock Function")
 #   - Famous narrow curved valley
+#   - Local minimum near (-1, 1, 1, ..., 1) for d >= 4
 
 rosenbrock_fn <- function(x) {
   d <- length(x)
