@@ -391,21 +391,32 @@ PROCEDURE:
 
   4. CHECK OBJECTIVE CHANGE (absolute):
      IF k > 0 AND |f_k - f_{k-1}| < tol_obj THEN
-       RETURN (TRUE, "objective_abs")
+       IF ||g_k||_∞ < 10 × tol_grad THEN    [gradient reasonably small]
+         RETURN (TRUE, "objective_abs")
+       END IF
      END IF
 
   5. CHECK OBJECTIVE CHANGE (relative):
      IF k > 0 AND |f_k - f_{k-1}| < tol_rel_obj × max(1, |f_k|) THEN
-       RETURN (TRUE, "objective_rel")
+       IF ||g_k||_∞ < 10 × tol_grad THEN    [gradient reasonably small]
+         RETURN (TRUE, "objective_rel")
+       END IF
      END IF
 
   6. CHECK PARAMETER CHANGE:
      IF k > 0 AND ||x_k - x_{k-1}||_∞ < tol_param THEN
-       RETURN (TRUE, "parameter")
+       IF ||g_k||_∞ < 10 × tol_grad THEN    [gradient reasonably small]
+         RETURN (TRUE, "parameter")
+       END IF
      END IF
 
   RETURN (FALSE, "")
 ```
+
+**Implementation Notes:**
+
+- Criteria 4-6 (objective/parameter changes) include a gradient safeguard (`||g_k||_∞ < 10 × tol_grad`) to prevent false convergence on non-stationary points. Small objective/parameter changes alone do not guarantee convergence; the gradient must also be reasonably small.
+- Criteria 1-3 (iteration limit and gradient norms) are primary convergence indicators and do not require additional safeguards.
 
 **Default Parameters** (following Stan):
 
@@ -481,6 +492,23 @@ PROCEDURE:
     2. CHECK CONVERGENCE:
        (converged, reason) ← convergence_check(...)    [Algorithm 0]
        IF converged THEN BREAK END IF
+
+    2b. CHECK STAGNATION:
+       action ← detect_stagnation(step_norms, f_values, ...)    [Algorithm 6a]
+       IF action = "stop" THEN
+         [Stagnation detected - verify gradient before stopping]
+         IF ||g_k||_∞ < gtol_abs THEN
+           converged ← TRUE
+           reason ← "stagnation"
+           BREAK
+         ELSE
+           [Stagnation but gradient not small - unusual situation]
+           already_refreshed ← TRUE    [prevent infinite stagnation loops]
+         END IF
+       ELSE IF action = "refresh_hessian" THEN
+         [For quasi-Newton: refresh Hessian approximation]
+         already_refreshed ← TRUE
+       END IF
 
     3. ATTEMPT NEWTON STEP (skip if previously rejected):
        step_type ← "cubic"    [default]
@@ -774,7 +802,7 @@ PROCEDURE:
 
 # Momentum Acceleration
 
-Momentum acceleration can reduce iteration counts by 30-90% without additional function evaluations. The adaptive momentum parameter ensures stability by vanishing near convergence.
+Momentum acceleration is **disabled by default** (`use_momentum = FALSE`) due to potential oscillation with small momentum coefficients (momentum_c1, momentum_c2). When enabled with aggressive parameters (momentum_c1 = 1.0, momentum_c2 = 1.0), it can reduce iterations on some ill-conditioned problems. However, conservative default values (c1 = 0.1, c2 = 0.1) may cause convergence failure or slow progress on functions like Dixon-Price. Users should enable momentum only after testing on their specific problem class.
 
 *Cross-reference: See literature-review.qmd Section 4 for theoretical background on momentum with cubic regularization (CRm, ARCm variants) and complexity analysis.*
 
@@ -1072,12 +1100,16 @@ PROCEDURE:
        IF is_qn AND NOT already_refreshed THEN
          RETURN "refresh_hessian"    [try FD Hessian refresh]
        ELSE
-         RETURN "stop"               [declare stagnation]
+         RETURN "stop"               [recommend stopping - requires verification]
        END IF
      END IF
 
      RETURN "continue"
 ```
+
+**Implementation Note:**
+
+The "stop" action from this algorithm is a recommendation, not final convergence. In the main loop (Algorithm 1, Step 2b), the "stop" action must be verified by checking if the gradient norm is sufficiently small (`||g_k||_∞ < gtol_abs`) before declaring actual convergence. This prevents false convergence at stagnation points that are not stationary points.
 
 ## Algorithm 6b: NaN/Inf Protection
 

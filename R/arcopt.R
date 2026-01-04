@@ -286,30 +286,16 @@ arcopt <- function(x0, fn, gr, hess = NULL,
               stop("NaN or Inf detected in gradient at accepted Newton point")
             }
 
-            # Apply momentum if enabled
-            if (control$use_momentum && !is.null(y_prev)) {
-              s_norm <- sqrt(sum(s_current^2))
-              g_norm <- sqrt(sum(g_new^2))
-              beta_k <- min(
-                control$momentum_max,
-                control$momentum_c1 / max(s_norm, .Machine$double.eps),
-                control$momentum_c2 / max(g_norm, .Machine$double.eps)
-              )
+            # Newton steps do NOT use momentum - they are already optimal for
+            # the local quadratic model. Adding momentum would push past the
+            # computed Newton solution and could cause oscillation.
+            x_current <- y_new
+            f_current <- f_new
+            g_current <- g_new
 
-              momentum_direction <- y_new - y_prev
-              x_current <- y_new + beta_k * momentum_direction
-              f_current <- fn(x_current)
-              g_current <- gr(x_current)
-              fn_evals <- fn_evals + 1
-              gr_evals <- gr_evals + 1
-            } else {
-              x_current <- y_new
-              f_current <- f_new
-              g_current <- g_new
-            }
-
-            # Update y_prev for next iteration
-            y_prev <- y_new
+            # Reset momentum state after Newton step - if we later fall back
+            # to cubic, momentum should start fresh (no stale direction)
+            y_prev <- NULL
 
             h_current <- hess(x_current)
             hess_evals <- hess_evals + 1
