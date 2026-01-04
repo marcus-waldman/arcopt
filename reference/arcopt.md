@@ -160,8 +160,8 @@ result <- arcopt(
 )
 
 print(result$par)      # Should be near c(1, 1)
-#> [1] 1 1
+#> [1] 0.9999994 0.9999989
 print(result$value)    # Should be near 0
-#> [1] 7.067483e-18
+#> [1] 3.138905e-13
 # }
 ```
