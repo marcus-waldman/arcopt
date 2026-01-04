@@ -123,3 +123,55 @@ test_that("Newton step fails when Cholesky fails despite positive Gershgorin", {
   # Should fail because H has negative eigenvalue
   expect_false(result$success)
 })
+
+# Tests for predicted reduction computation
+
+test_that("Newton step computes correct predicted reduction", {
+  g <- c(2, 4)
+  H <- matrix(c(2, 0, 0, 2), 2, 2)
+
+  result <- try_newton_step(g, H)
+
+  expect_true(result$success)
+  expect_equal(result$s, c(-1, -2), tolerance = 1e-10)
+  expect_equal(result$pred_reduction, 5.0, tolerance = 1e-10)
+})
+
+test_that("Newton predicted reduction is always positive for PD Hessian", {
+  set.seed(999)
+  n <- 5
+  g <- rnorm(n)
+  # Create diagonally dominant PD Hessian (guaranteed to pass Gershgorin)
+  H <- diag(n) * 10 + matrix(rnorm(n * n, sd = 0.1), n, n)
+  H <- (H + t(H)) / 2  # Make symmetric
+
+  result <- try_newton_step(g, H)
+
+  expect_true(result$success)
+  expect_true(result$pred_reduction > 0)
+})
+
+test_that("Newton predicted reduction is NULL when step fails", {
+  g <- c(1, 1)
+  H <- matrix(c(1, 0, 0, -1), 2, 2)
+
+  result <- try_newton_step(g, H)
+
+  expect_false(result$success)
+  expect_null(result$pred_reduction)
+})
+
+test_that("Newton predicted reduction matches quadratic model formula", {
+  g <- c(1, 2, 3)
+  set.seed(456)
+  # Create diagonally dominant PD Hessian (guaranteed to pass Gershgorin)
+  H <- diag(3) * 10 + matrix(rnorm(9, sd = 0.1), 3, 3)
+  H <- (H + t(H)) / 2  # Make symmetric
+
+  result <- try_newton_step(g, H)
+  s <- result$s
+
+  manual_pred <- -(sum(g * s) + 0.5 * sum(s * (H %*% s)))
+
+  expect_equal(result$pred_reduction, manual_pred, tolerance = 1e-10)
+})

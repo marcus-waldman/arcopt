@@ -138,13 +138,13 @@ test_that("arcopt works on higher dimensional problems", {
   expect_equal(result$par, rep(0, n), tolerance = 1e-5)
 })
 
-test_that("arcopt requires hess or hess_vec", {
+test_that("arcopt requires hess", {
   sphere <- function(x) sum(x^2)
   sphere_gr <- function(x) 2 * x
 
   expect_error(
-    arcopt(x0 = c(1, 1), fn = sphere, gr = sphere_gr, hess = NULL, hess_vec = NULL),
-    "At least one of 'hess' or 'hess_vec' must be provided"
+    arcopt(x0 = c(1, 1), fn = sphere, gr = sphere_gr, hess = NULL),
+    "Hessian function 'hess' must be provided"
   )
 })
 
@@ -371,4 +371,74 @@ test_that("arcopt handles asymmetric bounds", {
   # Function value should be close to 0.25 (minimum is at (0, 0.5), f = 0.25)
   # but we allow for some numerical error and possible convergence to nearby point
   expect_true(result$value <= 1.0)
+})
+
+# Integration tests for Newton-rho behavior
+
+test_that("arcopt uses rho-based acceptance for Newton steps", {
+  Q <- matrix(c(1, 0, 0, 100), 2, 2)
+  b <- c(1, 10)
+
+  fn <- function(x) 0.5 * sum(x * (Q %*% x)) - sum(b * x)
+  gr <- function(x) as.vector(Q %*% x - b)
+  hess <- function(x) Q
+
+  x0 <- c(5, 5)
+
+  result <- arcopt(x0, fn, gr, hess, control = list(maxit = 50, trace = FALSE))
+
+  expect_true(result$converged)
+  expect_equal(result$par, c(1, 0.1), tolerance = 1e-6)
+})
+
+test_that("arcopt rejects poor Newton steps and falls back to cubic", {
+  rosenbrock_fn <- function(x) {
+    (1 - x[1])^2 + 100 * (x[2] - x[1]^2)^2
+  }
+
+  rosenbrock_gr <- function(x) {
+    c(
+      -2 * (1 - x[1]) - 400 * x[1] * (x[2] - x[1]^2),
+      200 * (x[2] - x[1]^2)
+    )
+  }
+
+  rosenbrock_hess <- function(x) {
+    matrix(c(
+      1200 * x[1]^2 - 400 * x[2] + 2, -400 * x[1],
+      -400 * x[1], 200
+    ), 2, 2)
+  }
+
+  x0 <- c(0.5, 0.5)
+
+  result <- arcopt(
+    x0,
+    rosenbrock_fn,
+    rosenbrock_gr,
+    rosenbrock_hess,
+    control = list(maxit = 100, eta1 = 0.1, trace = FALSE)
+  )
+
+  expect_true(result$converged)
+  expect_equal(result$par, c(1, 1), tolerance = 1e-5)
+})
+
+test_that("Newton and cubic steps use same sigma update mechanism", {
+  sphere_fn <- function(x) sum(x^2)
+  sphere_gr <- function(x) 2 * x
+  sphere_hess <- function(x) 2 * diag(length(x))
+
+  x0 <- c(1, 1, 1)
+
+  result <- arcopt(
+    x0,
+    sphere_fn,
+    sphere_gr,
+    sphere_hess,
+    control = list(maxit = 50, trace = FALSE)
+  )
+
+  expect_true(result$converged)
+  expect_equal(result$par, c(0, 0, 0), tolerance = 1e-8)
 })

@@ -10,11 +10,7 @@
 #' @param gr Function that computes the gradient. Should take a numeric vector
 #'   of length Q and return a numeric vector of length Q. Required.
 #' @param hess Function that computes the Hessian matrix. Should take a numeric
-#'   vector of length Q and return a Q×Q symmetric matrix. Either `hess` or
-#'   `hess_vec` must be provided.
-#' @param hess_vec Function that computes Hessian-vector products. Should take
-#'   a numeric vector v of length Q and return H*v (length Q). Allows matrix-free
-#'   optimization for large-scale problems. Optional if `hess` is provided.
+#'   vector of length Q and return a Q×Q symmetric matrix. Required.
 #' @param lower Numeric vector of lower bounds (length Q). Use `-Inf` for
 #'   unbounded parameters. Default: all `-Inf`.
 #' @param upper Numeric vector of upper bounds (length Q). Use `Inf` for
@@ -29,9 +25,9 @@
 #'
 #' ## Hessian Requirement
 #' ARC critically depends on accurate curvature information. The `hess` argument
-#' is strongly recommended. If `hess = NULL`, the algorithm falls back to SR1
-#' quasi-Newton approximation, which is less robust but avoids Hessian
-#' computation.
+#' is required. For convenience, finite-difference Hessians can be computed
+#' automatically with `control$use_fd = TRUE`, but analytic Hessians are
+#' strongly recommended for best performance.
 #'
 #' ## Control Parameters
 #' The `control` list accepts:
@@ -44,14 +40,12 @@
 #' * `eta2`: Very successful step threshold (default: 0.9)
 #' * `gamma1`: Regularization decrease factor (default: 0.5)
 #' * `gamma2`: Regularization increase factor (default: 2.0)
-#' * `use_sr1`: Use SR1 quasi-Newton if `hess = NULL` (default: TRUE)
-#' * `cubic_solver`: Solver selection: "auto" (recommended), "ldl", "eigen", "cg"
-#'   (default: "auto"). The "cg" solver is **experimental** and may perform poorly
-#'   on small problems; use "eigen" for most applications.
-#' * `cubic_solver_threshold`: Problem size threshold for auto-selection (default: 500)
-#' * `use_momentum`: Enable momentum acceleration (default: TRUE).
-#'   Can reduce iterations by 30-90% on ill-conditioned problems with no additional
-#'   function evaluations. Automatically vanishes near optimum to prevent oscillation.
+#' * `cubic_solver`: Solver selection: "auto" (recommended) or "eigen"
+#'   (default: "auto"). Auto-selection uses eigendecomposition (Algorithm 5a) for
+#'   robust handling of indefinite Hessians and hard cases.
+#' * `use_momentum`: Enable momentum acceleration (default: FALSE).
+#'   When enabled, can help on some ill-conditioned problems but may cause
+#'   oscillation with small momentum coefficients. Not recommended for general use.
 #' * `momentum_max`: Maximum momentum parameter (default: 0.9)
 #' * `momentum_c1`: Step-size scaling constant (default: 0.1)
 #' * `momentum_c2`: Gradient scaling constant (default: 0.1)
@@ -96,7 +90,7 @@
 #' print(result$par)      # Should be near c(1, 1)
 #' print(result$value)    # Should be near 0
 #' }
-arcopt <- function(x0, fn, gr, hess = NULL, hess_vec = NULL,
+arcopt <- function(x0, fn, gr, hess = NULL,
                    lower = rep(-Inf, length(x0)),
                    upper = rep(Inf, length(x0)),
                    control = list()) {
@@ -134,10 +128,8 @@ arcopt <- function(x0, fn, gr, hess = NULL, hess_vec = NULL,
     eta2 = 0.9,
     gamma1 = 0.5,
     gamma2 = 2.0,
-    use_sr1 = TRUE,
     cubic_solver = "auto",
-    cubic_solver_threshold = 500,
-    use_momentum = TRUE,
+    use_momentum = FALSE,
     momentum_max = 0.9,
     momentum_c1 = 0.1,
     momentum_c2 = 0.1,
@@ -177,17 +169,13 @@ arcopt <- function(x0, fn, gr, hess = NULL, hess_vec = NULL,
   }
 
   # Validate Hessian specification
-  if (is.null(hess) && is.null(hess_vec)) {
-    stop("At least one of 'hess' or 'hess_vec' must be provided")
+  if (is.null(hess)) {
+    stop("Hessian function 'hess' must be provided")
   }
 
-  # Initialize Hessian if full matrix is provided
-  if (!is.null(hess)) {
-    h_current <- hess(x_current)
-    hess_evals <- hess_evals + 1
-  } else {
-    h_current <- NULL  # Will use hess_vec in cubic solver
-  }
+  # Initialize Hessian
+  h_current <- hess(x_current)
+  hess_evals <- hess_evals + 1
 
   # Initialize history with initial values
   f_values <- c(f_values, f_current)
@@ -233,12 +221,20 @@ arcopt <- function(x0, fn, gr, hess = NULL, hess_vec = NULL,
     )
 
     if (stagnation_result == "stop") {
-      converged <- TRUE
-      conv_reason <- "stagnation"
-      break
+      # Stagnation detected (no progress), but only declare convergence if gradient is small
+      g_norm <- sqrt(sum(g_current^2))
+      if (g_norm < control$gtol_abs) {
+        converged <- TRUE
+        conv_reason <- "stagnation"
+        break
+      } else {
+        # Stagnation but gradient not small: unusual situation
+        # Prevent infinite loop by not re-triggering stagnation detection
+        already_refreshed <- TRUE
+      }
     } else if (stagnation_result == "refresh_hessian") {
-      # For quasi-Newton: would refresh Hessian here
-      # Currently not implemented
+      # arcopt uses analytic or FD Hessians (not quasi-Newton)
+      # Stagnation refresh mechanism reserved for future quasi-Newton support
       already_refreshed <- TRUE
     }
 
@@ -250,78 +246,96 @@ arcopt <- function(x0, fn, gr, hess = NULL, hess_vec = NULL,
       newton_result <- try_newton_step(g_current, h_current)
 
       if (newton_result$success) {
-        # Newton step succeeded
+        # Newton step succeeded (H is positive definite)
         s_current <- newton_result$s
+        pred_reduction <- newton_result$pred_reduction
 
         # Apply box constraints to Newton step
         box_result <- apply_box_constraints(x_current, s_current, lower, upper)
         s_current <- box_result$s_bounded
         x_trial <- box_result$x_new
+
+        # Evaluate trial point
         f_trial <- fn(x_trial)
         fn_evals <- fn_evals + 1
 
         # Check for NaN/Inf in Newton trial evaluation
         if (!check_finite(f_trial, rep(0, length(x_trial)))) {
-          # NaN/Inf detected: skip Newton, will use cubic
+          # NaN/Inf detected: treat as unsuccessful, will use cubic
+          prev_rejected <- TRUE
           used_newton <- FALSE
         } else {
-          # Accept Newton step and update
-          x_previous <- x_current
-          f_previous <- f_current
+          # Compute actual reduction and ratio
+          actual_reduction <- f_current - f_trial
+          rho <- actual_reduction / pred_reduction
 
-          # Trial point before momentum
-          y_new <- x_trial
-          f_new <- f_trial
-          g_new <- gr(y_new)
-          gr_evals <- gr_evals + 1
+          # Accept or reject based on ratio test (same as cubic)
+          if (is.finite(rho) && rho >= control$eta1) {
+            # Accept Newton step
+            x_previous <- x_current
+            f_previous <- f_current
 
-          # Check for NaN/Inf in new gradient
-          if (!check_finite(f_new, g_new)) {
-            stop("NaN or Inf detected in gradient at accepted Newton point")
-          }
-
-          # Apply momentum if enabled
-          if (control$use_momentum && !is.null(y_prev)) {
-            # Compute adaptive momentum parameter (Algorithm 3)
-            s_norm <- sqrt(sum(s_current^2))
-            g_norm <- sqrt(sum(g_new^2))
-            beta_k <- min(
-              control$momentum_max,
-              control$momentum_c1 / max(s_norm, .Machine$double.eps),
-              control$momentum_c2 / max(g_norm, .Machine$double.eps)
-            )
-
-            # Momentum step: x_{k+1} = y_{k+1} + beta_k * (y_{k+1} - y_k)
-            momentum_direction <- y_new - y_prev
-            x_current <- y_new + beta_k * momentum_direction
-            f_current <- fn(x_current)
-            g_current <- gr(x_current)
-            fn_evals <- fn_evals + 1
+            # Trial point before momentum
+            y_new <- x_trial
+            f_new <- f_trial
+            g_new <- gr(y_new)
             gr_evals <- gr_evals + 1
-          } else {
-            # No momentum: x_{k+1} = y_{k+1}
-            x_current <- y_new
-            f_current <- f_new
-            g_current <- g_new
-          }
 
-          # Update y_prev for next iteration
-          y_prev <- y_new
+            # Check for NaN/Inf in new gradient
+            if (!check_finite(f_new, g_new)) {
+              stop("NaN or Inf detected in gradient at accepted Newton point")
+            }
 
-          if (!is.null(hess)) {
+            # Apply momentum if enabled
+            if (control$use_momentum && !is.null(y_prev)) {
+              s_norm <- sqrt(sum(s_current^2))
+              g_norm <- sqrt(sum(g_new^2))
+              beta_k <- min(
+                control$momentum_max,
+                control$momentum_c1 / max(s_norm, .Machine$double.eps),
+                control$momentum_c2 / max(g_norm, .Machine$double.eps)
+              )
+
+              momentum_direction <- y_new - y_prev
+              x_current <- y_new + beta_k * momentum_direction
+              f_current <- fn(x_current)
+              g_current <- gr(x_current)
+              fn_evals <- fn_evals + 1
+              gr_evals <- gr_evals + 1
+            } else {
+              x_current <- y_new
+              f_current <- f_new
+              g_current <- g_new
+            }
+
+            # Update y_prev for next iteration
+            y_prev <- y_new
+
             h_current <- hess(x_current)
             hess_evals <- hess_evals + 1
+
+            # Track step norm and function value
+            step_norms <- c(step_norms, sqrt(sum(s_current^2)))
+            f_values <- c(f_values, f_current)
+
+            # Update sigma using standard algorithm (SAME AS CUBIC)
+            sigma_current <- update_sigma_cgt(
+              sigma_current = sigma_current,
+              rho = rho,
+              eta1 = control$eta1,
+              eta2 = control$eta2,
+              gamma1 = control$gamma1,
+              gamma2 = control$gamma2
+            )
+
+            prev_rejected <- FALSE
+            used_newton <- TRUE
+            step_type <- "newton"
+          } else {
+            # Reject Newton step - will use cubic solver
+            prev_rejected <- TRUE
+            used_newton <- FALSE
           }
-
-          # Track step norm and function value for stagnation detection
-          step_norms <- c(step_norms, sqrt(sum(s_current^2)))
-          f_values <- c(f_values, f_current)
-
-          # Decrease sigma after successful Newton step
-          sigma_current <- max(control$gamma1 * sigma_current, 1e-16)
-          prev_rejected <- FALSE
-          used_newton <- TRUE
-          step_type <- "newton"
         }
       }
     }
@@ -332,10 +346,8 @@ arcopt <- function(x0, fn, gr, hess = NULL, hess_vec = NULL,
       cubic_result <- solve_cubic_subproblem_dispatch(
         g = g_current,
         H = h_current,
-        hess_vec = hess_vec,
         sigma = sigma_current,
-        solver = control$cubic_solver,
-        solver_threshold = control$cubic_solver_threshold
+        solver = control$cubic_solver
       )
 
       s_current <- cubic_result$s
@@ -408,10 +420,8 @@ arcopt <- function(x0, fn, gr, hess = NULL, hess_vec = NULL,
         # Update y_prev for next iteration
         y_prev <- y_new
 
-        if (!is.null(hess)) {
-          h_current <- hess(x_current)
-          hess_evals <- hess_evals + 1
-        }
+        h_current <- hess(x_current)
+        hess_evals <- hess_evals + 1
 
         # Track step norm and function value for stagnation detection
         step_norms <- c(step_norms, sqrt(sum(s_current^2)))

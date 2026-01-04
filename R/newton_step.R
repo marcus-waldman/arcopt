@@ -10,6 +10,7 @@
 #' @return List with components:
 #'   \item{success}{Logical; TRUE if Newton step computed successfully}
 #'   \item{s}{Newton step vector if successful, NULL otherwise}
+#'   \item{pred_reduction}{Predicted reduction from quadratic model if successful, NULL otherwise}
 #'
 #' @details
 #' The algorithm:
@@ -36,7 +37,7 @@ try_newton_step <- function(g, H) {
 
   if (lambda_min_bound <= 0) {
     # H may be indefinite; skip Newton
-    return(list(success = FALSE, s = NULL))
+    return(list(success = FALSE, s = NULL, pred_reduction = NULL))
   }
 
   # STEP 2: Attempt Cholesky factorization
@@ -52,7 +53,7 @@ try_newton_step <- function(g, H) {
 
   if (!chol_result$success) {
     # Cholesky failed; H is indefinite
-    return(list(success = FALSE, s = NULL))
+    return(list(success = FALSE, s = NULL, pred_reduction = NULL))
   }
 
   # STEP 3: Solve Newton system: H * s = -g
@@ -61,5 +62,18 @@ try_newton_step <- function(g, H) {
   chol_factor <- chol_result$chol_factor
   s_newton <- backsolve(chol_factor, backsolve(chol_factor, -g, transpose = TRUE))
 
-  list(success = TRUE, s = s_newton)
+  # STEP 4: Compute predicted reduction from quadratic model
+  # Newton minimizes m_quad(s) = f + g^T s + (1/2) s^T H s
+  # Predicted reduction = m(0) - m(s) = -(g^T s + (1/2) s^T H s)
+  Hs <- as.vector(H %*% s_newton)
+  pred_reduction <- -(sum(g * s_newton) + 0.5 * sum(s_newton * Hs))
+
+  # STEP 5: Safeguard - ensure non-negative predicted reduction
+  # Zero is allowed (happens when g = 0, already at stationary point)
+  if (pred_reduction < 0) {
+    # This shouldn't happen with PD H and s = -H^{-1}g, but check anyway
+    return(list(success = FALSE, s = NULL, pred_reduction = NULL))
+  }
+
+  list(success = TRUE, s = s_newton, pred_reduction = pred_reduction)
 }

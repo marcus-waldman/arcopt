@@ -23,13 +23,13 @@ This document provides implementation-ready pseudocode for the arcopt package, w
 
 ## Architecture Overview
 
-The optimizer consists of **9 algorithm groups** organized into 4 layers:
+The optimizer consists of **8 algorithm groups** organized into 4 layers:
 
 | Layer | Components | Purpose |
 |-------|------------|---------|
 | **Orchestration** | Algorithm 1 (Main Loop) | Controls iteration flow, dispatches to sub-algorithms |
 | **Core Solvers** | Algorithms 1a, 5 | Newton step, cubic subproblem solver |
-| **Adaptation** | Algorithms 0, 2a/2b, 3, 4 | Convergence, σ updates, momentum, quasi-Newton |
+| **Adaptation** | Algorithms 0, 2a/2b, 3 | Convergence, σ updates, momentum |
 | **Safeguards** | Algorithms 6a/6b, 7, 8 | Robustness, constraints |
 
 ## System Flowchart
@@ -129,16 +129,14 @@ flowchart TD
 | 2a | CGT Update | §5.1 | Classical σ adaptation |
 | 2b | Interpolation Update | §5.2 | Lipschitz-enhanced σ adaptation |
 | 3 | ARCm | §6 | Momentum acceleration |
-| 4 | SR1 Update | §7 | Quasi-Newton with safeguards |
-| 5a | Eigendecomposition Solver | §8.1 | Cubic subproblem via spectral decomposition (n ≤ 500) |
-| 5b | ARCqK Multi-Shift Solver | §8.2 | Cubic subproblem via CG-Lanczos (n > 500, sparse) |
-| 6a | Stagnation Recovery | §9.1 | Detect/recover from stagnation |
-| 6b | NaN/Inf Protection | §9.2 | Handle numerical failures |
-| 7a | Box Step Truncation | §10.1 | Apply bounds to step |
-| 7b | Initial Point Projection | §10.1 | Validate starting point |
-| 8a | Null Space Basis | §10.2 | Compute Z for linear equality |
-| 8b | Space Transforms | §10.2 | Convert between x and z spaces |
-| 8c | Constraint Projection | §10.2 | Project to feasible manifold |
+| 5a | Eigendecomposition Solver | §7.1 | Cubic subproblem via spectral decomposition (n ≤ 500) |
+| 6a | Stagnation Recovery | §8.1 | Detect/recover from stagnation |
+| 6b | NaN/Inf Protection | §8.2 | Handle numerical failures |
+| 7a | Box Step Truncation | §9.1 | Apply bounds to step |
+| 7b | Initial Point Projection | §9.1 | Validate starting point |
+| 8a | Null Space Basis | §9.2 | Compute Z for linear equality |
+| 8b | Space Transforms | §9.2 | Convert between x and z spaces |
+| 8c | Constraint Projection | §9.2 | Project to feasible manifold |
 
 ## Computational Complexity
 
@@ -152,9 +150,7 @@ The table below shows per-call complexity. For the main loop (Algorithm 1), mult
 | 2a | O(1) | 0 | 0 | 0 | 0 | 1/iter | None |
 | 2b | O(1) | 0 | 0 | 0 | 0 | 1/iter | None |
 | 3 | O(n) | 0 | 1 | 0 | 0 | 1/iter | Low |
-| 4 | O(n²) | 0 | 0 | 0 | 0 | 1/iter | Low (BLAS) |
 | 5a | **O(n³)+O(n²·L)** | 0 | 0 | 0 | 0 | 0-1/iter | Low (LAPACK eigen) |
-| 5b | **O(n·J·m)** | 0 | 0 | 0 | J | 0-1/iter | **Medium** (CG loop, shift management) |
 | 6a | O(1) | 0 | 0 | 0 | 0 | 1/iter | None |
 | 6b | O(n³)×R | R | R | 0 | 0 | rare | Low |
 | 7a | O(n) | 0 | 0 | 0 | 0 | 1/iter | **Medium** (tight loop) |
@@ -437,7 +433,6 @@ ALGORITHM 1: ARC with Newton-First Strategy
 INPUT:
   x_0           Initial point
   σ_0           Initial regularization parameter
-  hess_method   Hessian source: "analytic", "fd", "sr1", or "bfgs"
   η_1, η_2      Acceptance thresholds
   γ             Multiplicative update factor
   σ_min, σ_max  Regularization bounds
@@ -452,7 +447,7 @@ OUTPUT:
   x*            Approximate minimizer (or maximizer if fnscale = -1)
   f*            Function value at x* (original scale)
   g*            Gradient at x* (original scale)
-  H*            Hessian at x* (original scale, or B* if quasi-Newton)
+  H*            Hessian at x* (original scale)
   converge_info Convergence status and reason
   trace_data    Diagnostic history (if trace ≥ 1)
 
@@ -468,7 +463,6 @@ PROCEDURE:
   END IF
 
   k ← 0
-  is_qn ← (hess_method ∈ {"sr1", "bfgs"})
   prev_rejected ← FALSE              [track if previous step was rejected]
   consecutive_negative_rho ← 0       [for monitoring theoretical guarantees]
   IF trace ≥ 1 THEN initialize_trace_storage() END IF
@@ -488,25 +482,51 @@ PROCEDURE:
        (converged, reason) ← convergence_check(...)    [Algorithm 0]
        IF converged THEN BREAK END IF
 
-    3. ATTEMPT NEWTON STEP (skip if rejected or quasi-Newton):
+    3. ATTEMPT NEWTON STEP (skip if previously rejected):
        step_type ← "cubic"    [default]
-       IF NOT prev_rejected AND NOT is_qn THEN
-         newton_success ← try_newton_step(g_k, H_k, x_k, f_k, c_armijo)
+       IF NOT prev_rejected THEN
+         (newton_success, s_newton, pred_quad) ← try_newton_step(g_k, H_k)
          IF newton_success THEN
-           x_{k+1} ← x_k + s_newton
-           s_k ← s_newton
-           σ_{k+1} ← max(σ_k / γ, σ_min)    [successful: decrease σ]
-           ρ_k ← NA    [not computed for Newton]
-           step_type ← "newton"
-           prev_rejected ← FALSE
-           GOTO STEP 9    [skip cubic machinery]
+           [Evaluate Newton trial point]
+           x_trial ← x_k + s_newton
+           f_trial ← f(x_trial)
+
+           [Check for NaN/Inf in trial evaluation]
+           IF NOT is_finite(f_trial) THEN
+             newton_success ← FALSE    [treat as failure, will use cubic]
+           END IF
+         END IF
+
+         IF newton_success THEN
+           [Compute ratio using quadratic model]
+           actual_reduction ← f_k - f_trial
+           ρ_k ← actual_reduction / pred_quad
+
+           [Accept or reject based on ratio test]
+           IF is_finite(ρ_k) AND ρ_k ≥ η_1 THEN
+             [Accept Newton step]
+             s_k ← s_newton
+             x_{k+1} ← x_trial
+             f_{k+1} ← f_trial
+             prev_rejected ← FALSE
+             step_type ← "newton"
+
+             [Update sigma using standard algorithm]
+             σ_{k+1} ← update_sigma(σ_k, ρ_k, η_1, η_2, γ, σ_min, σ_max)
+             [Algorithm 2a or 2b - same as cubic steps]
+
+             GOTO STEP 9    [skip cubic solver, proceed to gradient/Hessian eval]
+           ELSE
+             [Reject Newton step - will fall through to cubic solver]
+             prev_rejected ← TRUE
+           END IF
          END IF
        END IF
-       [If prev_rejected: Newton already failed with this H_k, skip]
+       [If Newton skipped/failed/rejected: proceed to cubic solver]
 
-    4. CUBIC SUBPROBLEM (Newton failed, rejected, or quasi-Newton):
+    4. CUBIC SUBPROBLEM (Newton failed or rejected):
        (s_k, λ_k) ← solve_cubic_subproblem(g_k, H_k, σ_k, cubic_solver)
-       [Algorithm 5a (eigendecomposition) or 5b (ARCqK) based on control$cubic_solver]
+       [Algorithm 5a (eigendecomposition) based on control$cubic_solver]
 
     5. EVALUATE TRIAL POINT:
        x_trial ← x_k + s_k
@@ -597,37 +617,38 @@ ALGORITHM 1a: Try Newton Step
 INPUT:
   g_k         Gradient
   H_k         Hessian (analytic or FD, NOT quasi-Newton)
-  x_k         Current iterate
-  f_k         Current function value
-  c_armijo    Armijo parameter (e.g., 1e-4)
 
 OUTPUT:
-  success     TRUE if Newton step accepted
+  success     TRUE if Newton step computable (H_k is PD)
   s_newton    Newton step (if successful)
+  pred_quad   Predicted reduction from quadratic model
 
 PROCEDURE:
   1. GERSHGORIN PRE-CHECK:
      λ_min_bound ← gershgorin_lower_bound(H_k)    [O(n²)]
      IF λ_min_bound ≤ 0 THEN
-       RETURN (FALSE, NULL)    [H_k may be indefinite, skip Newton]
+       RETURN (FALSE, NULL, NULL)    [H_k may be indefinite, skip Newton]
      END IF
 
   2. ATTEMPT CHOLESKY:
      (L, chol_success) ← cholesky(H_k)
      IF NOT chol_success THEN
-       RETURN (FALSE, NULL)    [H_k is indefinite]
+       RETURN (FALSE, NULL, NULL)    [H_k is indefinite]
      END IF
 
   3. SOLVE NEWTON SYSTEM:
      s_newton ← -L^{-T} L^{-1} g_k    [i.e., s = -H_k^{-1} g_k]
 
-  4. CHECK ARMIJO CONDITION:
-     f_trial ← f(x_k + s_newton)
-     IF f_trial ≤ f_k + c_armijo × g_k^T s_newton THEN
-       RETURN (TRUE, s_newton)    [Newton step accepted]
+  4. COMPUTE PREDICTED REDUCTION (quadratic model):
+     [Newton minimizes m_quad(s) = f + g^T s + (1/2) s^T H s]
+     pred_quad ← -(g_k^T s_newton + (1/2) s_newton^T H_k s_newton)
+
+     [Safeguard: ensure non-negative predicted reduction]
+     IF pred_quad < 0 THEN
+       RETURN (FALSE, NULL, NULL)    [descent direction violated]
      END IF
 
-  RETURN (FALSE, NULL)    [Newton step rejected]
+  RETURN (TRUE, s_newton, pred_quad)
 
 
 FUNCTION gershgorin_lower_bound(H):
@@ -662,7 +683,7 @@ FUNCTION gershgorin_lower_bound(H):
 
 - Newton converges quadratically near solutions; ARC adds overhead when Newton works
 - Gershgorin check is O(n²) vs Cholesky's O(n³) — cheap to try first
-- Only attempt Newton with analytic/FD Hessians; SR1 approximations may be intentionally indefinite
+- Only attempt Newton with analytic or FD Hessians for accurate curvature information
 
 # Regularization Parameter Updates
 
@@ -813,69 +834,6 @@ PROCEDURE:
 | `momentum_max` | 0.9 | $(0, 1)$ | Maximum $\beta_k$ |
 | `momentum_c1` | 0.1 | $(0, \infty)$ | Step-size scaling |
 | `momentum_c2` | 0.1 | $(0, \infty)$ | Gradient scaling |
-
-# Quasi-Newton Updates
-
-When analytic Hessians are unavailable and finite differences are too expensive, quasi-Newton approximations provide an alternative. SR1 is preferred over BFGS with ARC because it can represent indefinite curvature.
-
-*Cross-reference: See literature-review.qmd Section 3 for comparison of SR1 vs BFGS, and Section 3.3 for SR1 safeguarding strategies (skip rule, restart, modified variants).*
-
-## Algorithm 4: SR1 Update with Safeguards
-
-```
-ALGORITHM 4: SR1 Update with Safeguards
-─────────────────────────────────────────────────────────────────────
-
-INPUT:
-  B_k         Current Hessian approximation
-  s_k         Step taken: s_k = x_{k+1} - x_k
-  y_k         Gradient difference: y_k = g_{k+1} - g_k
-  τ           Skip threshold (e.g., 10⁻⁸ to 10⁻⁴)
-  N_skip      Maximum consecutive skips before restart
-  skip_count  Counter of consecutive skipped updates
-
-OUTPUT:
-  B_{k+1}     Updated Hessian approximation
-  skip_count  Updated skip counter
-
-PROCEDURE:
-  1. COMPUTE UPDATE VECTORS:
-     r_k ← y_k - B_k s_k
-     denom ← r_k^T s_k
-
-  2. CHECK SKIP CONDITION:
-     IF |denom| < τ · ||r_k|| · ||s_k|| THEN
-       B_{k+1} ← B_k                    [skip update]
-       skip_count ← skip_count + 1
-     ELSE
-       B_{k+1} ← B_k + (r_k r_k^T) / denom    [apply SR1]
-       skip_count ← 0
-     END IF
-
-  3. CHECK FOR RESTART:
-     IF skip_count ≥ N_skip THEN
-       α ← y_k^T s_k / (s_k^T s_k)      [Barzilai-Borwein scaling]
-       IF α ≤ 0 THEN α ← 1 END IF
-       B_{k+1} ← α · I                   [restart with scaled identity]
-       skip_count ← 0
-     END IF
-
-  RETURN B_{k+1}, skip_count
-```
-
-**SR1 Safeguard Parameters**:
-
-| Parameter | Default | Valid Range | Description |
-|-----------|---------|-------------|-------------|
-| `sr1_skip_tol` | $10^{-6}$ | $(10^{-8}, 10^{-4})$ | Denominator threshold $\tau$ |
-| `sr1_restart_after` | 5 | $\{3, 4, 5, ...\}$ | Restarts after N skips |
-| `sr1_init_scale` | "bb" | "bb", "identity" | Restart scaling method |
-
-**Why SR1 with ARC**:
-
-- SR1 can represent indefinite Hessians (negative eigenvalues)
-- ARC handles indefinite curvature naturally via cubic regularization
-- BFGS forces positive definiteness, wasting ARC's saddle-escape capability
 
 # Cubic Subproblem Solver
 
@@ -1045,133 +1003,14 @@ NOTES:
   - For diagnostics: return eigenvalue spectrum in trace mode
 ```
 
-## Algorithm 5b: ARCqK Multi-Shift Cubic Solver
+**Implementation Status:**
+- ✅ Fully implemented in `solve_cubic_eigen()`
+- Used for all problem sizes by default
+- See `design/historical/ldl-solver.qmd` for removed LDL approach
 
-This approach solves multiple shifted systems $(H + \lambda_i I)d = -g$ simultaneously using CG-Lanczos with a single Hessian-vector product per iteration. Negative curvature is automatically detected when $\gamma_j < 0$ during CG, allowing early termination of inadequate shifts.
+## Deferred: Scalable Methods
 
-**When to use:** Large-scale problems (n > 500), sparse Hessians, or when only Hessian-vector products are available (e.g., automatic differentiation, matrix-free methods).
-
-```
-ALGORITHM 5b: ARCqK Multi-Shift Cubic Solver
-─────────────────────────────────────────────────────────────────────
-
-INPUT:
-  g           Gradient vector
-  Hv_func     Function computing Hessian-vector products: Hv_func(v) → Hv
-  σ           Regularization parameter
-  ψ           Shift spacing ratio (e.g., 10^(1/2) ≈ 3.16)
-  e_L         Minimum shift exponent (e.g., -10 → λ_min = 10^(-10))
-  e_U         Maximum shift exponent (e.g., 20 → λ_max = 10^20)
-  ζ           Residual tolerance exponent (e.g., 0.5)
-  ξ           Residual tolerance constant (e.g., 1e-6)
-  max_cg_iter Maximum CG iterations (e.g., min(100, 2n))
-
-OUTPUT:
-  s           Solution (step from best shift)
-  λ           Selected shift
-  converged   TRUE if CG converged for selected shift
-
-PROCEDURE:
-  0. HANDLE ZERO GRADIENT:
-     IF ||g|| < machine_epsilon THEN
-       RETURN (s = 0, λ = 0, converged = TRUE)
-     END IF
-
-  1. DISCRETIZE SHIFTS:
-     m ← ceil((e_U - e_L) / log₁₀(ψ))
-     λ₀ ← 10^e_L
-     FOR i = 0 TO m DO
-       shifts[i] ← λ₀ × ψ^i
-       active[i] ← TRUE
-     END FOR
-
-  2. INITIALIZE CG-LANCZOS:
-     x⁽ⁱ⁾ ← 0 for all i    [m+1 solution vectors]
-     μ₀ ← ||g||
-     v₀ ← g / μ₀           [first Lanczos vector]
-     p⁽ⁱ⁾ ← -g for all i   [m+1 search directions, negative for minimization]
-     σ⁽ⁱ⁾ ← μ₀ for all i    [residual norms]
-     π⁽ⁱ⁾ ← μ₀² for all i   [||p||² values]
-     v₋₁ ← 0
-     ω₋₁ ← 0, γ₋₁ ← 1
-
-  3. CG-LANCZOS ITERATION:
-     FOR j = 0 TO max_cg_iter DO
-       [=== LANCZOS PART (shift-independent) ===]
-       Hvⱼ ← Hv_func(vⱼ)              [single Hessian-vector product]
-       δⱼ ← vⱼ^T Hvⱼ
-       temp ← Hvⱼ - δⱼ vⱼ - μⱼ v_{j-1}
-       μⱼ₊₁ ← ||temp||
-       IF μⱼ₊₁ < machine_epsilon THEN BREAK END IF    [Lanczos breakdown]
-       vⱼ₊₁ ← temp / μⱼ₊₁
-
-       [=== CG PART (for each active shift) ===]
-       any_active ← FALSE
-       FOR i = 0 TO m DO
-         IF NOT active[i] THEN CONTINUE END IF
-
-         δⱼ⁽ⁱ⁾ ← δⱼ + shifts[i]
-         γⱼ⁽ⁱ⁾ ← 1 / (δⱼ⁽ⁱ⁾ - ωⱼ₋₁⁽ⁱ⁾ / γⱼ₋₁⁽ⁱ⁾)
-
-         [NEGATIVE CURVATURE CHECK]
-         IF γⱼ⁽ⁱ⁾ < 0 THEN
-           active[i] ← FALSE
-           indefinite_count ← indefinite_count + 1
-           CONTINUE
-         END IF
-
-         ωⱼ⁽ⁱ⁾ ← (μⱼ₊₁ × γⱼ⁽ⁱ⁾)²
-         σⱼ₊₁⁽ⁱ⁾ ← -μⱼ₊₁ × γⱼ⁽ⁱ⁾ × σⱼ⁽ⁱ⁾
-         xⱼ₊₁⁽ⁱ⁾ ← xⱼ⁽ⁱ⁾ + γⱼ⁽ⁱ⁾ × pⱼ⁽ⁱ⁾
-         pⱼ₊₁⁽ⁱ⁾ ← σⱼ₊₁⁽ⁱ⁾ × vⱼ₊₁ + ωⱼ⁽ⁱ⁾ × pⱼ⁽ⁱ⁾
-         πⱼ₊₁⁽ⁱ⁾ ← σⱼ₊₁⁽ⁱ⁾² + ωⱼ⁽ⁱ⁾² × πⱼ⁽ⁱ⁾
-
-         [CONVERGENCE CHECK]
-         tol_i ← ξ × min(||g||, ||xⱼ₊₁⁽ⁱ⁾||)^(1+ζ)
-         IF |σⱼ₊₁⁽ⁱ⁾| ≤ tol_i THEN
-           converged[i] ← TRUE
-         END IF
-
-         any_active ← TRUE
-       END FOR
-
-       IF NOT any_active THEN BREAK END IF    [all systems terminated]
-     END FOR
-
-  4. SELECT BEST SHIFT:
-     [Find smallest non-indefinite shift index]
-     i_plus ← min{i : active[i] OR converged[i]}
-
-     [Among valid shifts, find closest to satisfying secular equation]
-     best_i ← i_plus
-     best_error ← ∞
-     FOR i = i_plus TO m DO
-       IF active[i] OR converged[i] THEN
-         error ← |σ × ||x⁽ⁱ⁾|| - shifts[i]|
-         IF error < best_error THEN
-           best_error ← error
-           best_i ← i
-         END IF
-       END IF
-     END FOR
-
-     s ← x⁽ᵇᵉˢᵗ_ⁱ⁾
-     λ ← shifts[best_i]
-
-  5. COMPUTE PREDICTED REDUCTION:
-     Hs ← Hv_func(s)
-     pred_reduction ← -g^T s - ½ s^T Hs - (σ/3) ||s||³
-
-  RETURN (s, λ, pred_reduction, converged[best_i])
-
-NOTES:
-  - Single Hessian-vector product per CG iteration (independent of m)
-  - O(m × n) storage for solutions and search directions
-  - Typical parameters: ψ = 10^(1/2), e_L = -10, e_U = 20 → m = 61 shifts
-  - Negative curvature detected automatically via sign of γⱼ
-  - No explicit eigenvalue computation required
-  - Reuse of solutions: if iteration unsuccessful, try larger shift (already computed)
-```
+For large-scale optimization (n > 500) and matrix-free methods, see `design/scalable-arcs.qmd` for ARCqK multi-shift CG-Lanczos (Algorithm 5b) deferred to future work.
 
 ## Solver Selection and Parameters
 
@@ -1179,31 +1018,23 @@ NOTES:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `cubic_solver` | "auto" | "auto", "eigen", or "cg" |
-| `cubic_solver_threshold` | 500 | Problem size threshold for auto selection |
-| `tol_lambda` | $10^{-10}$ | Secular equation tolerance (both solvers) |
+| `cubic_solver` | "auto" | "auto" or "eigen" |
+| `tol_lambda` | $10^{-10}$ | Secular equation tolerance |
 | `max_iter_lambda` | 50 | Max iterations (eigendecomposition) |
-| `max_cg_iter` | `min(100, 2n)` | Max CG iterations (ARCqK) |
-| `arcqk_psi` | $10^{1/2}$ | Shift spacing ratio |
-| `arcqk_e_lower` | -10 | Minimum shift exponent |
-| `arcqk_e_upper` | 20 | Maximum shift exponent |
-| `arcqk_zeta` | 0.5 | Residual tolerance exponent |
-| `arcqk_xi` | $10^{-6}$ | Residual tolerance constant |
 
 **User interface:**
 
 ```r
-# Default: automatic selection
+# Default: eigendecomposition (recommended)
 result <- arcopt(x0, fn, gr, hess)
 
-# Force eigendecomposition (good for n ≤ 500, dense H)
+# Explicit eigendecomposition
 result <- arcopt(x0, fn, gr, hess,
                  control = list(cubic_solver = "eigen"))
 
-# Force ARCqK (good for n > 500 or sparse H)
-# Requires Hessian-vector product function
-result <- arcopt(x0, fn, gr, hess_vec = Hv_func,
-                 control = list(cubic_solver = "cg"))
+# Legacy LDL solver
+result <- arcopt(x0, fn, gr, hess,
+                 control = list(cubic_solver = "ldl"))
 ```
 
 # Robustness Safeguards

@@ -68,19 +68,25 @@ check_convergence <- function(g_current, f_current, f_previous,
   # Compute objective change
   obj_change <- abs(f_current - f_previous)
 
+  # For objective/parameter convergence criteria, require gradient to be
+  # reasonably small (10x the strict tolerance) to avoid false positives
+  # on non-stationary points
+  gradient_reasonably_small <- g_norm_inf < 10 * tol_grad
+
   # 4. CHECK OBJECTIVE CHANGE (absolute)
-  if (obj_change < tol_obj) {
+  if (obj_change < tol_obj && gradient_reasonably_small) {
     return(list(converged = TRUE, reason = "objective_abs"))
   }
 
   # 5. CHECK OBJECTIVE CHANGE (relative)
-  if (obj_change < tol_rel_obj * max(1, abs(f_current))) {
+  if (obj_change < tol_rel_obj * max(1, abs(f_current)) &&
+      gradient_reasonably_small) {
     return(list(converged = TRUE, reason = "objective_rel"))
   }
 
   # 6. CHECK PARAMETER CHANGE (infinity norm)
   param_change <- max(abs(x_current - x_previous))
-  if (param_change < tol_param) {
+  if (param_change < tol_param && gradient_reasonably_small) {
     return(list(converged = TRUE, reason = "parameter"))
   }
 

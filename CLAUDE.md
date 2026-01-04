@@ -15,13 +15,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The optimizer implements a hierarchical 4-layer system:
 
 1. **Orchestration Layer**: Main loop (Algorithm 1) that controls iteration flow and dispatches to sub-algorithms
-2. **Core Solvers Layer**: Newton step computation (Algorithm 1a) and cubic subproblem solver (Algorithm 5)
-3. **Adaptation Layer**: Convergence checks (Algorithm 0), σ (sigma) regularization updates (Algorithms 2a/2b), momentum (Algorithm 3), and SR1 quasi-Newton updates (Algorithm 4)
+2. **Core Solvers Layer**: Newton step computation (Algorithm 1a) and eigendecomposition cubic solver (Algorithm 5a)
+3. **Adaptation Layer**: Convergence checks (Algorithm 0), σ (sigma) regularization updates (Algorithms 2a/2b), and momentum (Algorithm 3)
 4. **Safeguards Layer**: Indefiniteness handling (Algorithms 6a/6b), box constraint truncation (Algorithm 7), and linear equality constraint handling (Algorithm 8)
 
 ### Key Design Philosophy
 
-- **Hessian-Centric**: Accurate second derivative information is prioritized. Hessian sources in order of preference: analytic > automatic differentiation > finite differences > SR1 quasi-Newton
+- **Hessian-Centric**: Accurate second derivative information is prioritized. Hessian sources in order of preference: analytic > automatic differentiation > finite differences. Quasi-Newton methods deferred to future work (see design/scalable-arcs.qmd).
 - **Robust by Default**: Single entry point `arcopt(x0, fn, gr, hess)` with sensible defaults; users should not need to manually tune regularization or select solvers
 - **Saddle Point Escape**: Cubic regularization naturally handles negative curvature without explicit eigenvector computation
 - **Constraint Handling**: Box constraints via step truncation; linear equality constraints via null-space transformation
@@ -29,9 +29,9 @@ The optimizer implements a hierarchical 4-layer system:
 ## Documentation
 
 - **design/design-principles.qmd**: Design philosophy, target user profile, problem characteristics, and core principles
-- **design/pseudocode.qmd**: Complete algorithmic specifications (9 algorithm groups) with system flowchart and detailed pseudocode
+- **design/pseudocode.qmd**: Complete algorithmic specifications (8 algorithm groups) with system flowchart and detailed pseudocode
 - **design/literature-review.qmd**: Academic references and theoretical foundations
-- **literature/consensus_reviews/**: Topic-specific reviews on regularization parameters, quasi-Newton methods, failure modes, and comparisons with other ARC implementations
+- **literature/consensus_reviews/**: Topic-specific reviews on regularization parameters, failure modes, and comparisons with other ARC implementations
 
 ## Development Guidelines
 
@@ -45,7 +45,7 @@ This is a research project in early development stages. The repository currently
 ### When Implementing Features
 
 1. **Follow the pseudocode specifications** in design/pseudocode.qmd exactly—these are implementation-ready
-2. **Maintain Hessian-centric philosophy**: Default interface requires Hessian function; provide convenience wrappers (FD, SR1) as secondary options
+2. **Maintain Hessian-centric philosophy**: Default interface requires Hessian function; provide finite-difference wrapper as convenience option
 3. **Prioritize robustness**: Include automatic indefiniteness detection, adaptive σ adjustment, and numerical safeguards
 4. **Test on pathological problems**: Ill-conditioned, nonconvex, indefinite Hessian, saddle point, and ridge maximum cases
 5. **Reference design principles** when making architectural decisions—existing decisions are well-justified
@@ -53,11 +53,28 @@ This is a research project in early development stages. The repository currently
 ### Future Development Priorities
 
 Based on literature review and design documents:
-- Core cubic regularization solver (Algorithm 5) with modified Cholesky factorization
-- Adaptive regularization updates (Algorithms 2a/2b) for σ adjustment
-- Indefiniteness handling (Algorithms 6a/6b) for negative curvature
-- Constraint handling (Algorithms 7-8) for box and linear equality constraints
-- SR1 quasi-Newton updates (Algorithm 4) as approximate Hessian option
+- Core cubic regularization solver (Algorithm 5a) with eigendecomposition ✓
+- Adaptive regularization updates (Algorithms 2a/2b) for σ adjustment ✓
+- Indefiniteness handling for negative curvature ✓
+- Constraint handling (Algorithms 7-8) for box and linear equality constraints ✓
+- Momentum acceleration (Algorithm 3) as ARCm variant ✓
+
+### Deferred Features
+
+To maintain focus on core use case (statisticians, 2-500 parameters, analytic Hessians):
+
+**Removed in favor of eigendecomposition:**
+- LDL-based cubic solver (see design/historical/ldl-solver.qmd)
+
+**Removed from current plans:**
+- SR1 quasi-Newton updates - see design/scalable-arcs.qmd for preserved Algorithm 4
+- Rationale: Cubic regularization depends on accurate curvature; finite differences preferred over quasi-Newton approximations
+
+**Deferred to future releases:**
+- ARCqK multi-shift CG-Lanczos solver (Algorithm 5b) for n > 500
+- Matrix-free optimization via hess_vec interface
+
+See design/scalable-arcs.qmd for preserved implementations and design rationale.
 
 ## Development Workflow & CRAN Compliance
 

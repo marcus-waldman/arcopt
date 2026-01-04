@@ -9,7 +9,6 @@ arcopt(
   fn,
   gr,
   hess = NULL,
-  hess_vec = NULL,
   lower = rep(-Inf, length(x0)),
   upper = rep(Inf, length(x0)),
   control = list()
@@ -25,12 +24,7 @@ numeric vector of length Q and return a scalar.}
 of length Q and return a numeric vector of length Q. Required.}
 
 \item{hess}{Function that computes the Hessian matrix. Should take a numeric
-vector of length Q and return a Q×Q symmetric matrix. Either \code{hess} or
-\code{hess_vec} must be provided.}
-
-\item{hess_vec}{Function that computes Hessian-vector products. Should take
-a numeric vector v of length Q and return H*v (length Q). Allows matrix-free
-optimization for large-scale problems. Optional if \code{hess} is provided.}
+vector of length Q and return a Q×Q symmetric matrix. Required.}
 
 \item{lower}{Numeric vector of lower bounds (length Q). Use \code{-Inf} for
 unbounded parameters. Default: all \code{-Inf}.}
@@ -66,9 +60,9 @@ where \eqn{\sigma_k} is adaptively adjusted based on model accuracy.
 \subsection{Hessian Requirement}{
 
 ARC critically depends on accurate curvature information. The \code{hess} argument
-is strongly recommended. If \code{hess = NULL}, the algorithm falls back to SR1
-quasi-Newton approximation, which is less robust but avoids Hessian
-computation.
+is required. For convenience, finite-difference Hessians can be computed
+automatically with \code{control$use_fd = TRUE}, but analytic Hessians are
+strongly recommended for best performance.
 }
 
 \subsection{Control Parameters}{
@@ -84,14 +78,12 @@ The \code{control} list accepts:
 \item \code{eta2}: Very successful step threshold (default: 0.9)
 \item \code{gamma1}: Regularization decrease factor (default: 0.5)
 \item \code{gamma2}: Regularization increase factor (default: 2.0)
-\item \code{use_sr1}: Use SR1 quasi-Newton if \code{hess = NULL} (default: TRUE)
-\item \code{cubic_solver}: Solver selection: "auto" (recommended), "ldl", "eigen", "cg"
-(default: "auto"). The "cg" solver is \strong{experimental} and may perform poorly
-on small problems; use "eigen" for most applications.
-\item \code{cubic_solver_threshold}: Problem size threshold for auto-selection (default: 500)
-\item \code{use_momentum}: Enable momentum acceleration (default: TRUE).
-Can reduce iterations by 30-90\% on ill-conditioned problems with no additional
-function evaluations. Automatically vanishes near optimum to prevent oscillation.
+\item \code{cubic_solver}: Solver selection: "auto" (recommended) or "eigen"
+(default: "auto"). Auto-selection uses eigendecomposition (Algorithm 5a) for
+robust handling of indefinite Hessians and hard cases.
+\item \code{use_momentum}: Enable momentum acceleration (default: FALSE).
+When enabled, can help on some ill-conditioned problems but may cause
+oscillation with small momentum coefficients. Not recommended for general use.
 \item \code{momentum_max}: Maximum momentum parameter (default: 0.9)
 \item \code{momentum_c1}: Step-size scaling constant (default: 0.1)
 \item \code{momentum_c2}: Gradient scaling constant (default: 0.1)

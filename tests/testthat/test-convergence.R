@@ -45,13 +45,20 @@ test_that("convergence check detects gradient_rel criterion", {
 })
 
 test_that("convergence check detects objective_abs criterion", {
+  # Note: objective convergence requires gradient to be reasonably small (< 10 * tol_grad)
+  # Use 1e-6 gradient which is:
+  # - > 1e-7 (tol_grad), so won't trigger gradient_abs
+  # - > 1e-12 * 10 = 1e-11 (tol_rel_grad * f_scale), so won't trigger gradient_rel
+  # - < 10 * 1e-7 = 1e-6, so passes reasonably_small check
   result <- check_convergence(
-    g_current = c(0.1, 0.1),  # Large enough to not trigger gradient criterion
+    g_current = c(5e-7, 5e-7),  # Between 1e-7 and 1e-6
     f_current = 10.0,
     f_previous = 10.0 + 1e-13,  # Change < 1e-12
     x_current = c(1, 2),
     x_previous = c(0.9, 1.9),  # Large enough to not trigger parameter criterion
     iter = 5,
+    tol_grad = 1e-7,  # gradient is 5e-7, not small enough for gradient_abs
+    tol_rel_grad = 1e-12,  # Very strict relative gradient check
     tol_obj = 1e-12
   )
 
@@ -60,13 +67,20 @@ test_that("convergence check detects objective_abs criterion", {
 })
 
 test_that("convergence check detects objective_rel criterion", {
+  # Note: objective convergence requires gradient to be reasonably small (< 10 * tol_grad)
+  # Use 5e-7 gradient which is:
+  # - > 1e-7 (tol_grad), so won't trigger gradient_abs
+  # - > 1e-14 * 1e6 = 1e-8 (tol_rel_grad * f_scale), so won't trigger gradient_rel
+  # - < 10 * 1e-7 = 1e-6, so passes reasonably_small check
   result <- check_convergence(
-    g_current = c(10.0, 10.0),  # Large enough to avoid gradient criteria
+    g_current = c(5e-7, 5e-7),
     f_current = 1e6,
     f_previous = 1e6 + 1e-2,  # Change = 1e-2, relative = 1e-2/1e6 = 1e-8
     x_current = c(1, 2),
     x_previous = c(0.9, 1.9),  # Large enough to avoid parameter criterion
     iter = 5,
+    tol_grad = 1e-7,  # gradient is 5e-7, not small enough for gradient_abs
+    tol_rel_grad = 1e-14,  # Very strict relative gradient check (5e-7 > 1e-14 * 1e6)
     tol_obj = 1e-20,  # Won't trigger abs criterion
     tol_rel_obj = 1e-7  # But 1e-8 < 1e-7
   )
@@ -76,13 +90,20 @@ test_that("convergence check detects objective_rel criterion", {
 })
 
 test_that("convergence check detects parameter criterion", {
+  # Note: parameter convergence requires gradient to be reasonably small (< 10 * tol_grad)
+  # Use 5e-7 gradient which is:
+  # - > 1e-7 (tol_grad), so won't trigger gradient_abs
+  # - > 1e-12 * 10 = 1e-11 (tol_rel_grad * f_scale), so won't trigger gradient_rel
+  # - < 10 * 1e-7 = 1e-6, so passes reasonably_small check
   result <- check_convergence(
-    g_current = c(0.1, 0.1),
+    g_current = c(5e-7, 5e-7),
     f_current = 10,
     f_previous = 10.1,
     x_current = c(1.0, 2.0),
     x_previous = c(1.0 + 1e-10, 2.0 - 5e-11),  # max |dx| = 1e-10 < 1e-8
     iter = 5,
+    tol_grad = 1e-7,  # gradient is 5e-7, not small enough for gradient_abs
+    tol_rel_grad = 1e-12,  # Very strict relative gradient check
     tol_param = 1e-8
   )
 
@@ -143,13 +164,20 @@ test_that("convergence check uses infinity norm for gradient", {
 
 test_that("convergence check uses infinity norm for parameters", {
   # Test that max(abs(x - x_prev)) is used
+  # Note: parameter convergence requires gradient to be reasonably small (< 10 * tol_grad)
+  # Use 5e-7 gradient which is:
+  # - > 1e-7 (tol_grad), so won't trigger gradient_abs
+  # - > 1e-12 * 10 = 1e-11 (tol_rel_grad * f_scale), so won't trigger gradient_rel
+  # - < 10 * 1e-7 = 1e-6, so passes reasonably_small check
   result <- check_convergence(
-    g_current = c(0.1, 0.1, 0.1, 0.1),
+    g_current = c(5e-7, 5e-7, 5e-7, 5e-7),
     f_current = 10,
     f_previous = 9,
     x_current = c(1, 2, 3, 4),
     x_previous = c(1 + 1e-10, 2, 3, 4 + 1e-7),  # max change = 1e-7
     iter = 5,
+    tol_grad = 1e-7,  # gradient is 5e-7, not small enough for gradient_abs
+    tol_rel_grad = 1e-12,  # Very strict relative gradient check
     tol_param = 1e-6  # 1e-7 < 1e-6, should converge
   )
 

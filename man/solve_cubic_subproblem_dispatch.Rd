@@ -4,31 +4,17 @@
 \alias{solve_cubic_subproblem_dispatch}
 \title{Solve Cubic Subproblem with Automatic Solver Selection}
 \usage{
-solve_cubic_subproblem_dispatch(
-  g,
-  H = NULL,
-  hess_vec = NULL,
-  sigma,
-  solver = "auto",
-  solver_threshold = 500,
-  ...
-)
+solve_cubic_subproblem_dispatch(g, H = NULL, sigma, solver = "auto", ...)
 }
 \arguments{
 \item{g}{Gradient vector (length n)}
 
-\item{H}{Hessian matrix (n x n symmetric, may be indefinite). Optional if
-hess_vec is provided.}
-
-\item{hess_vec}{Function computing Hessian-vector products: hess_vec(v) -> Hv.
-Optional if H is provided.}
+\item{H}{Hessian matrix (n x n symmetric, may be indefinite)}
 
 \item{sigma}{Regularization parameter (positive scalar)}
 
-\item{solver}{Solver to use: "auto" (default), "ldl", "eigen", or "cg"}
-
-\item{solver_threshold}{Threshold for auto-selection (default: 500).
-Problems with n <= threshold use eigendecomposition, larger problems use CG.}
+\item{solver}{Solver to use: "auto" (default) or "eigen".
+Auto-selection uses eigendecomposition (Algorithm 5a).}
 
 \item{...}{Additional arguments passed to specific solvers}
 }
@@ -45,32 +31,10 @@ Unified dispatcher for cubic subproblem solvers with automatic solver
 selection based on problem size and Hessian representation.
 }
 \details{
-Auto-selection logic:
-\itemize{
-\item If hess_vec is provided: use "cg" (matrix-free optimization)
-\item Else if n <= solver_threshold: use "eigen" (full eigendecomposition)
-\item Else: construct hess_vec from H and use "cg" (large-scale)
-}
+Uses eigendecomposition-based solver (Algorithm 5a) which provides robust
+handling of indefinite Hessians and hard cases.
 
-Manual solver options:
-\itemize{
-\item "ldl": LDL factorization with modified Cholesky (legacy solver)
-\item "eigen": Eigendecomposition with explicit hard-case handling (Algorithm 5a)
-\strong{Recommended for most applications}
-\item "cg": ARCqK multi-shift CG-Lanczos (Algorithm 5b)
-\strong{EXPERIMENTAL - may perform poorly on small problems (n < 500)}
+For large-scale matrix-free optimization (n > 500), see design/scalable-arcs.qmd
+for deferred large-scale solver implementations.
 }
-}
-\section{Performance Notes}{
-
-The CG solver is designed for large-scale problems (n > 500) and matrix-free
-optimization. Benchmarks show it performs poorly on small problems due to
-discrete shift selection and Lanczos breakdown issues. For best results:
-\itemize{
-\item Use "auto" (default) to let the dispatcher choose
-\item Use "eigen" explicitly for problems with n <= 500
-\item Use "cg" only for large-scale or matrix-free problems
-}
-}
-
 \keyword{internal}

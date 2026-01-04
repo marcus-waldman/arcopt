@@ -19,8 +19,7 @@ Depends:
     R (>= 4.1.0)
 Imports:
     Rcpp (>= 1.0.0),
-    utils,
-    fastmatrix
+    utils
 LinkingTo:
     Rcpp
 Suggests:

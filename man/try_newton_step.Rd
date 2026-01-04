@@ -15,6 +15,7 @@ try_newton_step(g, H)
 List with components:
 \item{success}{Logical; TRUE if Newton step computed successfully}
 \item{s}{Newton step vector if successful, NULL otherwise}
+\item{pred_reduction}{Predicted reduction from quadratic model if successful, NULL otherwise}
 }
 \description{
 Attempts to compute and validate a Newton step when the Hessian is positive
