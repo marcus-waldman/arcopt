@@ -133,6 +133,13 @@ The `control` list accepts:
 
 - `trace`: Print iteration progress (default: FALSE)
 
+- `use_qn`: Use quasi-Newton Hessian approximation (default: FALSE).
+  When TRUE, routes to arcopt_qn which uses QN updates instead of exact
+  Hessians. See `qn_method` for available QN methods.
+
+- `qn_method`: QN update method - "sr1", "bfgs", "lbfgs", "lsr1"
+  (default: "sr1"). Only used when `use_qn = TRUE`.
+
 ## Examples
 
 ``` r
