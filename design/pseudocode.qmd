@@ -129,7 +129,11 @@ flowchart TD
 | 2a | CGT Update | §5.1 | Classical σ adaptation |
 | 2b | Interpolation Update | §5.2 | Lipschitz-enhanced σ adaptation |
 | 3 | ARCm | §6 | Momentum acceleration |
-| 5a | Eigendecomposition Solver | §7.1 | Cubic subproblem via spectral decomposition (n ≤ 500) |
+| 4 | Adaptive Inexact Cubic QN | §7 | QN with adaptive inexactness control |
+| 4a | QN Hessian Updates | §7.1 | BFGS/SR1/L-BFGS/L-SR1 formulas |
+| 4b | Accelerated Cubic QN | §7.2 | Nesterov-accelerated O(k⁻²) variant |
+| 5a | Eigendecomposition Solver | §8.1 | Cubic subproblem via spectral decomposition (n ≤ 500) |
+| 5b | Woodbury Solver | §8.2 | Low-rank QN cubic subproblem O(m²n) |
 | 6a | Stagnation Recovery | §8.1 | Detect/recover from stagnation |
 | 6b | NaN/Inf Protection | §8.2 | Handle numerical failures |
 | 7a | Box Step Truncation | §9.1 | Apply bounds to step |
@@ -150,7 +154,11 @@ The table below shows per-call complexity. For the main loop (Algorithm 1), mult
 | 2a | O(1) | 0 | 0 | 0 | 0 | 1/iter | None |
 | 2b | O(1) | 0 | 0 | 0 | 0 | 1/iter | None |
 | 3 | O(n) | 0 | 1 | 0 | 0 | 1/iter | Low |
+| 4 | O(n²) | 1-2 | 1-2 | 0 | 0 | 1/iter | Low |
+| 4a | O(n²) | 0 | 0 | 0 | 0 | 1/iter | Low (rank-1/2 updates) |
+| 4b | O(n²) | 1-2 | 1-2 | 0 | 0 | 1/iter | Low |
 | 5a | **O(n³)+O(n²·L)** | 0 | 0 | 0 | 0 | 0-1/iter | Low (LAPACK eigen) |
+| 5b | O(m²n+m³·L) | 0 | 0 | 0 | 0 | 0-1/iter | Medium (small matrix ops) |
 | 6a | O(1) | 0 | 0 | 0 | 0 | 1/iter | None |
 | 6b | O(n³)×R | R | R | 0 | 0 | rare | Low |
 | 7a | O(n) | 0 | 0 | 0 | 0 | 1/iter | **Medium** (tight loop) |
@@ -163,7 +171,7 @@ The table below shows per-call complexity. For the main loop (Algorithm 1), mult
 
 - **L** = λ iterations in secular equation (typically 3-10)
 - **J** = CG iterations in ARCqK (problem-dependent, typically 5-50)
-- **m** = number of shifts in ARCqK (typically 61)
+- **m** = QN history size (typically 5-20) or number of shifts in ARCqK (typically 61)
 - **R** = NaN retries (typically 0-3)
 - **d** = n - rank(A), reduced dimension for linear equality constraints
 - **f/g/H/Hv calls** = calls to user-provided objective, gradient, Hessian, or Hessian-vector product functions
@@ -213,6 +221,11 @@ The table below shows per-call complexity. For the main loop (Algorithm 1), mult
 | $\rho_k$ | Ratio of actual to predicted reduction |
 | $\lambda$ | Cubic subproblem multiplier ($\lambda = \sigma\|s\|$) |
 | $m_k(s)$ | Cubic model: $f_k + g_k^T s + \frac{1}{2} s^T H_k s + \frac{\sigma_k}{3}\|s\|^3$ |
+| $B_k$ | Quasi-Newton Hessian approximation |
+| $\delta_k$ | Inexactness tolerance (adaptive) |
+| $\delta_x^y$ | Directional inexactness bound: $\|(H - B)(y-x)\| \le \delta_x^y \|y-x\|$ |
+| $y_k = g_{k+1} - g_k$ | Gradient difference (secant equation) |
+| $W, C$ | Low-rank factors: $B_m = B_0 + W^T C W$ |
 
 ## Execution Flow Summary
 
@@ -868,6 +881,473 @@ NOTES:
 | `momentum_alpha1` | 0.1 | $(0, \infty)$ | Linear step scaling (Gao's $\alpha_1$) |
 | `momentum_alpha2` | 1.0 | $(0, \infty)$ | Quadratic step scaling (Gao's $\alpha_2$) |
 
+# Quasi-Newton Acceleration
+
+This section specifies the Accelerated Cubic Regularized Quasi-Newton framework based on Kamzolov et al. (2023, 2025). Unlike traditional quasi-Newton methods that achieve at best $O(\epsilon^{-2})$ global convergence, combining QN with cubic regularization enables $O(k^{-1})$ non-accelerated and $O(k^{-2})$ accelerated rates—matching gradient descent and accelerated gradient descent respectively.
+
+*Cross-reference: See literature-review.qmd §sec-cubic-qn for theoretical background on directional inexactness and convergence analysis.*
+
+## Key Innovation: Directional Inexactness
+
+Classical inexact Hessian theory requires $\|H_k - B_k\|_2 \le \delta$ (accuracy in all directions). This is too stringent for QN approximations.
+
+**Directional inexactness** (Kamzolov et al.) only requires accuracy along the step direction:
+
+$$\|(H_k - B_k)(x_{k+1} - x_k)\| \le \delta_k^{x_{k+1}} \|x_{k+1} - x_k\|$$
+
+This weaker condition is naturally satisfied by BFGS, SR1, and DFP updates, enabling global convergence guarantees for cubic QN methods.
+
+## Architecture: Dual Path Design
+
+The `arcopt()` function provides two distinct execution paths based on the `use_qn` control parameter:
+
+```
+arcopt(x0, fn, gr, hess = NULL, control)
+  │
+  ├─ use_qn = FALSE ──→ Standard ARC Path (Algorithm 1)
+  │                      • Requires: exact Hessian or FD approximation
+  │                      • Subproblem: Eigendecomposition (Algorithm 5a)
+  │                      • Adaptation: σ only (Algorithms 2a/2b)
+  │                      • Acceleration: Momentum (Algorithm 3)
+  │
+  └─ use_qn = TRUE ───→ QN-ARC Path (Algorithm 4)
+                         • Hessian: QN approximation B_k (Algorithm 4a)
+                         • Subproblem: Woodbury solver (Algorithm 5b)
+                         • Adaptation: σ + δ (inexactness control)
+                         • Acceleration: Nesterov extrapolation (Algorithm 4b)
+
+Shared Components (both paths):
+  • Convergence checking (Algorithm 0)
+  • Constraint handling (Algorithms 7, 8)
+  • Safeguards (Algorithms 6a, 6b)
+  • Trace logging and diagnostics
+```
+
+**When to use which path:**
+
+| Scenario | Recommended Path | Rationale |
+|----------|------------------|-----------|
+| Analytic Hessian available, n ≤ 500 | Standard ARC | Exact curvature, proven robustness |
+| Analytic Hessian available, n > 500 | QN-ARC (hybrid) | Use H for init/refresh, QN for speed |
+| FD Hessian required, n ≤ 100 | Standard ARC | FD feasible for small problems |
+| FD Hessian required, n > 100 | QN-ARC (pure) | Avoid O(n²) gradient calls |
+| Ill-conditioned problems | Standard ARC | Exact eigenvalues handle indefiniteness |
+| Well-conditioned, many variables | QN-ARC | Faster per-iteration with L-BFGS |
+
+## Algorithm 4: Adaptive Inexact Cubic Regularized QN
+
+This is the main outer method that uses QN Hessian approximations with adaptive inexactness control.
+
+**Hybrid Design**: When an exact Hessian function is provided, it is used for:
+1. **Initialization**: B₀ = H(x₀) instead of scaled identity
+2. **Periodic refresh**: Recompute B_k = H(x_k) when approximation degrades
+
+This enables a cost-benefit tradeoff: occasional expensive Hessian evaluations prevent many wasted iterations with poor approximations.
+
+```
+ALGORITHM 4: Adaptive Inexact Cubic Regularized QN (Kamzolov et al. 2025)
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  x_0           Initial point
+  hess          Exact Hessian function H(x) [optional - enables hybrid mode]
+  σ_0           Initial regularization parameter
+  δ_0           Initial inexactness tolerance
+  γ_inc         Inexactness increase factor (default: 2.0)
+  γ_dec         Inexactness decrease factor (default: 0.5)
+  δ_max         Maximum tolerance before refresh (default: 10.0)
+  η_1, η_2      Acceptance thresholds (same as Algorithm 2a)
+  γ             Regularization update factor (same as Algorithm 2a)
+  M             Upper bound on Hessian Lipschitz constant (or 2L_2)
+  qn_method     "bfgs", "sr1", "lbfgs", or "lsr1"
+  qn_memory     Memory parameter m for limited-memory variants
+  refresh_period  Iterations between forced refresh (0 = disabled)
+
+OUTPUT:
+  x*            Approximate minimizer
+  B*            Final Hessian approximation
+
+PROCEDURE:
+  k ← 0
+  consecutive_skips ← 0    [SR1 skip counter]
+
+  (Step 0) INITIALIZE HESSIAN APPROXIMATION:
+    IF hess is provided THEN
+      B_0 ← hess(x_0)              [Hybrid: exact initialization]
+      refresh_available ← TRUE
+    ELSE
+      [Pure QN: scaled identity initialization]
+      g_0 ← ∇f(x_0)
+      γ_init ← 1.0                 [or Barzilai-Borwein estimate]
+      B_0 ← γ_init × I
+      refresh_available ← FALSE
+    END IF
+
+  WHILE NOT converged DO    [see Algorithm 0]
+
+    1. EVALUATE:
+       f_k ← f(x_k)
+       g_k ← ∇f(x_k)
+       [B_k already available from previous iteration or initialization]
+
+    2. SOLVE INEXACT CUBIC SUBPROBLEM:
+       [Minimize cubic model with QN Hessian and inexactness regularization]
+       s_k ← argmin_s { g_k^T s + ½ s^T B_k s + (M/6)||s||³ + (δ_k/2)||s||² }
+
+       [Use Algorithm 5b (Woodbury solver) for low-rank B_k]
+       x_{k+1}^{trial} ← x_k + s_k
+
+    3. EVALUATE TRIAL POINT:
+       f_{k+1}^{trial} ← f(x_{k+1}^{trial})
+       g_{k+1}^{trial} ← ∇f(x_{k+1}^{trial})
+
+    4. CHECK INEXACTNESS CONDITION:
+       [Verify directional inexactness bound is adequate]
+       condition_met ← check_inexactness(g_k, g_{k+1}^{trial}, s_k, δ_k, M)
+
+       WHILE NOT condition_met DO
+         δ_k ← δ_k × γ_inc    [increase inexactness tolerance]
+
+         [Re-solve subproblem with larger δ_k]
+         s_k ← argmin_s { g_k^T s + ½ s^T B_k s + (M/6)||s||³ + (δ_k/2)||s||² }
+         x_{k+1}^{trial} ← x_k + s_k
+         f_{k+1}^{trial} ← f(x_{k+1}^{trial})
+         g_{k+1}^{trial} ← ∇f(x_{k+1}^{trial})
+
+         condition_met ← check_inexactness(g_k, g_{k+1}^{trial}, s_k, δ_k, M)
+       END WHILE
+
+    5. COMPUTE RATIO:
+       pred ← -g_k^T s_k - ½ s_k^T B_k s_k - (M/6)||s_k||³
+       ρ_k ← (f_k - f_{k+1}^{trial}) / pred
+
+    6. ACCEPT/REJECT AND UPDATE σ:
+       IF ρ_k ≥ η_1 THEN
+         x_{k+1} ← x_{k+1}^{trial}
+         g_{k+1} ← g_{k+1}^{trial}
+         [Update σ via Algorithm 2a/2b]
+       ELSE
+         x_{k+1} ← x_k
+         g_{k+1} ← g_k
+         σ_{k+1} ← γ × σ_k    [increase regularization]
+       END IF
+
+    7. UPDATE HESSIAN APPROXIMATION:
+       IF step was accepted THEN
+         y_k ← g_{k+1} - g_k
+         [Apply QN update: Algorithm 4a]
+         (B_{k+1}, update_status) ← update_qn(B_k, s_k, y_k, qn_method, qn_memory)
+
+         [Track SR1 skips for refresh trigger]
+         IF update_status = "skipped" THEN
+           consecutive_skips ← consecutive_skips + 1
+         ELSE
+           consecutive_skips ← 0
+         END IF
+       ELSE
+         B_{k+1} ← B_k
+       END IF
+
+    8. CHECK REFRESH TRIGGERS (Hybrid Mode):
+       IF refresh_available THEN
+         needs_refresh ← FALSE
+
+         [Trigger 1: Inexactness tolerance degraded]
+         IF δ_k > δ_max THEN
+           needs_refresh ← TRUE
+           reason ← "δ_k exceeded threshold"
+         END IF
+
+         [Trigger 2: SR1 has skipped too many consecutive updates]
+         IF consecutive_skips ≥ 5 THEN
+           needs_refresh ← TRUE
+           reason ← "SR1 skip threshold reached"
+         END IF
+
+         [Trigger 3: Periodic refresh (optional)]
+         IF refresh_period > 0 AND (k mod refresh_period) = 0 THEN
+           needs_refresh ← TRUE
+           reason ← "periodic refresh"
+         END IF
+
+         [Trigger 4: Stagnation detected (from Algorithm 6a)]
+         IF stagnation_detected THEN
+           needs_refresh ← TRUE
+           reason ← "stagnation"
+         END IF
+
+         IF needs_refresh THEN
+           [Refresh with exact Hessian]
+           B_{k+1} ← hess(x_{k+1})
+           δ_{k+1} ← δ_0              [Reset inexactness tolerance]
+           consecutive_skips ← 0       [Clear skip counter]
+           [Clear QN history for limited-memory methods]
+           IF qn_method in {"lbfgs", "lsr1"} THEN
+             clear history
+           END IF
+           [Log refresh event for diagnostics]
+           IF trace ≥ 2 THEN
+             log("Hessian refresh at iteration", k, "reason:", reason)
+           END IF
+         END IF
+       END IF
+
+    9. UPDATE INEXACTNESS FOR NEXT ITERATION:
+       IF NOT needs_refresh THEN
+         δ_{k+1} ← δ_k    [carry forward; may be adjusted in step 4]
+       END IF
+       [Otherwise δ_{k+1} was already reset to δ_0 in step 8]
+
+    k ← k + 1
+  END WHILE
+
+  RETURN (x_k, B_k)
+
+─────────────────────────────────────────────────────────────────────
+SUBROUTINE: check_inexactness(g_k, g_{k+1}, s_k, δ_k, M)
+  [Check stopping condition from Kamzolov et al. Theorem 2.2]
+
+  grad_inner ← g_{k+1}^T (x_{k+1}^{trial} - x_k)    [= g_{k+1}^T s_k]
+  grad_norm ← ||g_{k+1}||
+  step_norm ← ||s_k||
+
+  threshold1 ← grad_norm² / (4 × δ_k)
+  threshold2 ← grad_norm^{3/2} / sqrt(3 × M)
+
+  RETURN grad_inner ≤ min(threshold1, threshold2)
+─────────────────────────────────────────────────────────────────────
+
+NOTES:
+
+1. The extra δ_k/2 ||s||² term in the subproblem accounts for Hessian
+   inexactness. When δ_k is small (accurate B_k), this term is negligible
+   and we recover standard cubic regularization behavior.
+
+2. The adaptive δ_k framework provides real-time control:
+   - When B_k is accurate: δ_k stays small → fast CRN-like convergence
+   - When B_k is poor: δ_k grows → graceful degradation to GD-like rates
+
+3. Convergence rates (Kamzolov et al. Theorem 2.2):
+   - Non-accelerated: O(max(δ_T R²/ε, sqrt(M R³/ε))) iterations
+   - When δ_k controlled: O(sqrt(M R³/ε)) matching full CRN
+
+4. The check_inexactness subroutine implements the stopping condition
+   that ensures the inexact subproblem solution is adequate.
+
+5. HYBRID MODE (when exact Hessian available):
+   - Initialization: B_0 = H(x_0) provides much better starting point than γI
+   - Refresh triggers prevent prolonged poor approximation periods:
+     * δ_k > δ_max: Inexactness tolerance degraded beyond threshold
+     * SR1 skips ≥ 5: Update formula rejected too many times consecutively
+     * Stagnation: Optimizer stuck (detected by Algorithm 6a)
+     * Periodic: Optional forced refresh every N iterations
+   - Cost-benefit: One exact H(x_k) evaluation prevents many wasted QN iterations
+   - After refresh: Reset δ_k = δ_0 and clear L-BFGS/L-SR1 history
+
+6. Pure QN mode (no Hessian function):
+   - B_0 = γI with γ = 1.0 or Barzilai-Borwein scaling
+   - Refresh disabled (cheaper per-iteration but may need more iterations)
+   - Relies entirely on δ_k adaptation for robustness
+```
+
+## Algorithm 4a: Quasi-Newton Hessian Updates
+
+Specifies BFGS and SR1 update formulas for maintaining the Hessian approximation.
+
+```
+ALGORITHM 4a: Quasi-Newton Hessian Updates
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  B_k           Current Hessian approximation (n × n)
+  s_k           Step vector: s_k = x_{k+1} - x_k
+  y_k           Gradient difference: y_k = g_{k+1} - g_k
+  method        "bfgs", "sr1", "lbfgs", or "lsr1"
+  m             Memory parameter for limited-memory variants
+  skip_tol      SR1 skip threshold (default: 1e-8)
+  history       List of (s_j, y_j) pairs for limited-memory
+
+OUTPUT:
+  B_{k+1}       Updated Hessian approximation
+  history       Updated history (for limited-memory)
+
+PROCEDURE:
+
+  CASE method = "bfgs":
+    [BFGS rank-2 update - maintains positive definiteness]
+
+    ρ_bfgs ← 1 / (y_k^T s_k)
+
+    IF y_k^T s_k > machine_epsilon THEN
+      [Standard BFGS formula]
+      B_{k+1} ← B_k - (B_k s_k s_k^T B_k)/(s_k^T B_k s_k) + ρ_bfgs × y_k y_k^T
+    ELSE
+      [Curvature condition violated - skip update]
+      B_{k+1} ← B_k
+    END IF
+
+  CASE method = "sr1":
+    [SR1 rank-1 update - allows indefiniteness]
+
+    r_k ← y_k - B_k s_k
+    denom ← r_k^T s_k
+
+    [Skip test: avoid numerical instability]
+    IF |denom| ≥ skip_tol × ||r_k|| × ||s_k|| THEN
+      B_{k+1} ← B_k + (r_k r_k^T) / denom
+    ELSE
+      [Denominator too small - skip update]
+      B_{k+1} ← B_k
+      increment skip_counter
+
+      [Restart if too many consecutive skips]
+      IF skip_counter > restart_threshold THEN
+        B_{k+1} ← (y_k^T s_k / s_k^T s_k) × I    [Barzilai-Borwein scaling]
+        reset skip_counter
+      END IF
+    END IF
+
+  CASE method = "lbfgs":
+    [Limited-memory BFGS with m stored pairs]
+
+    [Add new pair to history]
+    history ← append(history, (s_k, y_k))
+    IF length(history) > m THEN
+      history ← drop_oldest(history)
+    END IF
+
+    [B_{k+1} represented implicitly via two-loop recursion]
+    B_{k+1} ← (γ_k I, history)    [compact representation]
+
+    [Scaling: γ_k = y_k^T s_k / y_k^T y_k]
+    γ_k ← (y_k^T s_k) / (y_k^T y_k)
+
+  CASE method = "lsr1":
+    [Limited-memory SR1 with m stored pairs]
+
+    r_k ← y_k - B_k s_k    [B_k applied via compact form]
+    denom ← r_k^T s_k
+
+    IF |denom| ≥ skip_tol × ||r_k|| × ||s_k|| THEN
+      history ← append(history, (s_k, y_k))
+      IF length(history) > m THEN
+        history ← drop_oldest(history)
+      END IF
+    END IF
+
+    B_{k+1} ← (γ_k I, history)    [compact representation]
+
+  RETURN (B_{k+1}, history)
+
+─────────────────────────────────────────────────────────────────────
+NOTES:
+
+1. BFGS maintains B_k ≻ 0 by construction when y_k^T s_k > 0 (curvature
+   condition). This wastes ARC's ability to handle indefinite Hessians.
+
+2. SR1 can represent indefinite B_k, which pairs naturally with ARC's
+   cubic regularization. Prefer SR1 for nonconvex problems.
+
+3. Limited-memory variants store O(mn) instead of O(n²). The Hessian-
+   vector product B_k v is computed via two-loop recursion in O(mn).
+
+4. For limited-memory methods, the compact representation is:
+   B_m = γ_k I + W^T C W
+   where W contains s_j and y_j vectors, enabling Algorithm 5b.
+```
+
+## Algorithm 4b: Accelerated Inexact Cubic QN
+
+Nesterov-style acceleration achieving $O(k^{-2})$ convergence rate.
+
+```
+ALGORITHM 4b: Accelerated Inexact Cubic Regularized QN
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  x_0           Initial point
+  B_0           Initial Hessian approximation
+  A_0 = 0       Initial acceleration parameter
+  [All parameters from Algorithm 4]
+
+OUTPUT:
+  x*            Approximate minimizer
+
+PROCEDURE:
+  k ← 0
+  v_0 ← x_0     [auxiliary sequence]
+
+  WHILE NOT converged DO
+
+    1. COMPUTE ACCELERATION PARAMETERS:
+       [Solve for a_{k+1}: a_{k+1}² = A_k + a_{k+1}]
+       a_{k+1} ← (1 + sqrt(1 + 4 A_k)) / 2
+       A_{k+1} ← A_k + a_{k+1}
+
+       [Interpolation point]
+       τ_k ← a_{k+1} / A_{k+1}
+       y_k ← τ_k × v_k + (1 - τ_k) × x_k
+
+    2. EVALUATE AT INTERPOLATION POINT:
+       f(y_k), g(y_k), B(y_k)
+
+    3. SOLVE ACCELERATED CUBIC SUBPROBLEM:
+       [Same as Algorithm 4, Step 2, but at y_k]
+       s_k ← solve_inexact_cubic(g(y_k), B(y_k), M, δ_k)
+       x_{k+1}^{trial} ← y_k + s_k
+
+    4. ADAPTIVE INEXACTNESS CHECK:
+       [Same as Algorithm 4, Step 4]
+
+    5. COMPUTE RATIO AND ACCEPT/REJECT:
+       [Same as Algorithm 4, Steps 5-6]
+
+       IF step accepted THEN
+         x_{k+1} ← x_{k+1}^{trial}
+
+         [Update auxiliary sequence]
+         v_{k+1} ← v_k - a_{k+1} × ∇f(x_{k+1}) / (some scaling)
+       ELSE
+         x_{k+1} ← x_k
+         v_{k+1} ← v_k
+       END IF
+
+    6. UPDATE HESSIAN APPROXIMATION:
+       [Same as Algorithm 4, Step 7]
+
+    k ← k + 1
+  END WHILE
+
+  RETURN x_k
+
+─────────────────────────────────────────────────────────────────────
+NOTES:
+
+1. Convergence rate: O(max(sqrt(δ R² / ε), (M R³ / ε)^{1/3})) iterations
+   - With history-based QN: O(sqrt(L_1 R² / ε)) matching AGM
+   - With HVP sampling: O((M R³ / ε)^{1/3}) matching accelerated CRN
+
+2. The auxiliary sequence v_k provides the extrapolation that enables
+   acceleration. When δ_k is well-controlled, this achieves optimal
+   rates for convex functions.
+
+3. For nonconvex problems, use non-accelerated Algorithm 4 instead.
+   Acceleration is designed for convex optimization.
+```
+
+**Quasi-Newton Parameters**:
+
+| Parameter | Default | Valid Range | Description |
+|-----------|---------|-------------|-------------|
+| `use_qn` | FALSE | — | Enable quasi-Newton mode |
+| `qn_method` | "sr1" | "bfgs", "sr1", "lbfgs", "lsr1" | QN update formula |
+| `qn_memory` | 10 | $[3, 50]$ | History pairs for L-BFGS/L-SR1 |
+| `delta_init` | 1.0 | $(0, \infty)$ | Initial inexactness tolerance |
+| `delta_inc` | 2.0 | $(1, \infty)$ | Inexactness increase factor |
+| `sr1_skip_tol` | $10^{-8}$ | $(0, 1)$ | SR1 denominator threshold |
+| `sr1_restart_after` | 5 | $[1, \infty)$ | Skips before restart |
+| `use_accel` | FALSE | — | Enable Nesterov acceleration (convex only) |
+
 # Cubic Subproblem Solver
 
 The cubic subproblem $\min_s m_k(s)$ is the computational core of ARC. arcopt provides two solver options optimized for different problem scales and structures.
@@ -1040,6 +1520,165 @@ NOTES:
 - ✅ Fully implemented in `solve_cubic_eigen()`
 - Used for all problem sizes by default
 - See `design/historical/ldl-solver.qmd` for removed LDL approach
+
+## Algorithm 5b: Woodbury-Based Cubic Solver (Low-Rank QN)
+
+*Cross-reference: See literature-review.qmd §sec-cubic-qn for theoretical foundations.*
+
+This algorithm efficiently solves the cubic subproblem when the Hessian approximation has low-rank structure from quasi-Newton updates. Instead of working with the full $n \times n$ matrix, it exploits the Woodbury identity to reduce complexity from $O(n^3)$ to $O(m^2 n)$ where $m \ll n$ is the rank of the QN update.
+
+### Low-Rank Structure
+
+For limited-memory quasi-Newton methods, the Hessian approximation has the form:
+$$B_m = B_0 + W^T C W$$
+
+where:
+- $B_0 = \gamma I$ is a scaled identity (typically $\gamma = y_k^T s_k / s_k^T s_k$)
+- $W \in \mathbb{R}^{m \times n}$ contains the secant vectors (columns of $[S, Y]$ for L-BFGS)
+- $C \in \mathbb{R}^{m \times m}$ is a small symmetric matrix encoding the update structure
+
+For L-BFGS with history $m$, we have:
+$$B_m = \gamma I + \begin{bmatrix} S & \gamma Y \end{bmatrix} \begin{bmatrix} 0 & L^{-T} \\ L^{-1} & -L^{-1} D L^{-T} + \gamma L^{-1} Y^T Y L^{-T} \end{bmatrix} \begin{bmatrix} S^T \\ \gamma Y^T \end{bmatrix}$$
+
+where $S = [s_0, \ldots, s_{m-1}]$, $Y = [y_0, \ldots, y_{m-1}]$, $L_{ij} = s_i^T y_j$ for $i > j$, and $D = \text{diag}(s_i^T y_i)$.
+
+### Woodbury Identity
+
+For any $\lambda > 0$, the regularized inverse can be computed as:
+$$(B_m + \lambda I)^{-1} = A_\lambda^{-1} - A_\lambda^{-1} W^T (C^{-1} + W A_\lambda^{-1} W^T)^{-1} W A_\lambda^{-1}$$
+
+where $A_\lambda = B_0 + \lambda I = (\gamma + \lambda) I$.
+
+This gives the step as:
+$$s(\lambda) = -(B_m + \lambda I)^{-1} g = \frac{-1}{\gamma + \lambda} g + \frac{1}{(\gamma + \lambda)^2} W^T (C^{-1} + \frac{1}{\gamma + \lambda} W W^T)^{-1} W g$$
+
+The key insight: we only need to invert an $m \times m$ matrix (not $n \times n$).
+
+```
+────────────────────────────────────────────────────────────────────
+ALGORITHM 5b: WOODBURY CUBIC SOLVER (LOW-RANK QN)
+────────────────────────────────────────────────────────────────────
+
+INPUT:
+  g ∈ ℝⁿ          : Gradient
+  γ > 0           : Scaling parameter (B₀ = γI)
+  W ∈ ℝᵐˣⁿ        : Low-rank update vectors (m ≪ n)
+  C ∈ ℝᵐˣᵐ        : Small coefficient matrix
+  σ > 0           : Cubic regularization parameter
+  tol_λ > 0       : Convergence tolerance for λ
+
+OUTPUT:
+  s ∈ ℝⁿ          : Step solving min_s m_k(s)
+  λ ≥ 0           : Regularization parameter
+
+PROCEDURE:
+  (Step 0) Handle zero gradient
+    if ‖g‖ < tol_λ then
+      return (s = 0, λ = 0)
+    end if
+
+  (Step 1) Precompute Woodbury components
+    W_g ← W g                                    [O(mn): m×n times n vector]
+    W_WT ← W Wᵀ                                  [O(m²n): cached if possible]
+
+  (Step 2) Define step computation function
+    function compute_step(λ):
+      α ← γ + λ                                  [scalar]
+      M ← C⁻¹ + (1/α) W_WT                       [O(m²): m×m matrix]
+      z ← solve(M, W_g)                          [O(m³): m×m linear solve]
+      s ← (-1/α) g + (1/α²) Wᵀz                  [O(mn): step vector]
+      return s
+
+  (Step 3) Define secular equation
+    function secular(λ):
+      s ← compute_step(λ)
+      return ‖s‖ - λ/σ                           [Root when ‖s‖ = λ/σ]
+
+  (Step 4) Determine search interval
+    [Eigenvalue bounds for B_m are harder to compute exactly;
+     use safeguarded iteration starting from λ = σ‖g‖^{1/2}]
+    λ_init ← σ × ‖g‖^(1/2)                       [Initial guess]
+    λ_lo ← 0
+    λ_hi ← max(λ_init, 10σ‖g‖)                   [Conservative upper bound]
+
+  (Step 5) Bisection/Newton iteration for secular equation
+    for iter = 1, ..., max_iter_λ do
+      s ← compute_step(λ_init)
+      norm_s ← ‖s‖
+      ψ ← norm_s - λ_init/σ                      [Secular equation value]
+
+      if |ψ| < tol_λ then
+        return (s, λ_init)                       [Converged]
+      end if
+
+      [Newton update with safeguards]
+      [Derivative: ψ'(λ) = -sᵀ(B_m + λI)⁻²g / ‖s‖ - 1/σ]
+      [For efficiency, use bisection with Newton acceleration]
+
+      if ψ > 0 then                              [‖s‖ too large, need more λ]
+        λ_lo ← λ_init
+      else                                       [‖s‖ too small, need less λ]
+        λ_hi ← λ_init
+      end if
+
+      [Bisection step with Newton acceleration when safe]
+      λ_bisect ← (λ_lo + λ_hi) / 2
+
+      [Newton step: λ_new = λ - ψ/ψ']
+      s_Bs ← compute_step_deriv(λ_init, s, g)    [Compute (B_m + λI)⁻²g]
+      ψ_prime ← -dot(s, s_Bs) / norm_s - 1/σ
+      λ_newton ← λ_init - ψ / ψ_prime
+
+      [Choose Newton if in valid interval, else bisection]
+      if λ_lo < λ_newton < λ_hi then
+        λ_init ← λ_newton
+      else
+        λ_init ← λ_bisect
+      end if
+    end for
+
+    [Max iterations reached - return best approximation]
+    warning("Woodbury solver: max iterations reached")
+    return (compute_step(λ_init), λ_init)
+
+NOTES:
+  - Complexity is O(m²n + m³ log ε⁻¹) vs O(n³) for eigendecomposition
+  - For L-BFGS with m = 10 and n = 1000: ~10× speedup
+  - When B₀ = γI, the Woodbury formula simplifies significantly
+  - Cache W Wᵀ if solving multiple subproblems with same W
+  - For SR1 updates, C may be indefinite; handle with care
+────────────────────────────────────────────────────────────────────
+```
+
+**Helper function for derivative computation:**
+
+```
+function compute_step_deriv(λ, s, g):
+  [Computes (B_m + λI)⁻²g = (B_m + λI)⁻¹s for Newton update]
+  [Uses same Woodbury structure on s instead of g]
+  α ← γ + λ
+  W_s ← W s
+  M ← C⁻¹ + (1/α) W_WT                           [Already cached]
+  z ← solve(M, W_s)
+  return (-1/α) s + (1/α²) Wᵀz
+```
+
+**Complexity Analysis:**
+
+| Operation | Cost | Notes |
+|-----------|------|-------|
+| Precompute $W g$ | $O(mn)$ | Once per subproblem |
+| Precompute $W W^T$ | $O(m^2 n)$ | Can cache across iterations |
+| Each step computation | $O(m^3 + mn)$ | $m \times m$ solve + matrix-vector |
+| Secular iteration | $O(L \cdot m^3)$ | $L \approx 5-10$ iterations |
+| **Total** | $O(m^2 n + L m^3)$ | vs $O(n^3)$ for eigen |
+
+For $m = 10$, $n = 1000$: Woodbury takes $\approx 10^5$ flops vs $10^9$ for eigendecomposition.
+
+**Implementation Status:**
+- 🔲 Not yet implemented
+- Required for Accelerated QN framework (Algorithm 4)
+- See Algorithm 4 for integration with adaptive inexactness
 
 ## Deferred: Scalable Methods
 
@@ -1475,11 +2114,22 @@ x* ← transform_to_x_space(z*, x_p, Z)
 | `momentum_max` | 0.9 | ARCm | Maximum $\beta$ |
 | `momentum_c1` | 0.1 | ARCm | Step scaling constant |
 | `momentum_c2` | 0.1 | ARCm | Gradient scaling constant |
-| **Quasi-Newton** ||||
+| **Quasi-Newton (Basic)** ||||
 | `hess_method` | "fd" | SR1/BFGS | "analytic", "fd", "sr1", "bfgs" |
 | `sr1_skip_tol` | $10^{-6}$ | SR1 | Denominator threshold |
 | `sr1_restart_after` | 5 | SR1 | Skips before restart |
 | `sr1_init_scale` | "bb" | SR1 | Restart scaling |
+| **Quasi-Newton Acceleration (Algorithm 4)** ||||
+| `use_qn` | FALSE | Algorithm 4 | Enable quasi-Newton Hessian approximation |
+| `qn_method` | "sr1" | Algorithm 4 | "bfgs", "sr1", "lbfgs", "lsr1" |
+| `qn_memory` | 10 | Algorithm 4a | History pairs for limited-memory variants |
+| `delta_init` | 1.0 | Algorithm 4 | Initial inexactness tolerance $\delta_0$ |
+| `delta_inc` | 2.0 | Algorithm 4 | Inexactness increase factor |
+| `delta_dec` | 0.5 | Algorithm 4 | Inexactness decrease factor |
+| `delta_min` | $10^{-8}$ | Algorithm 4 | Minimum inexactness tolerance |
+| `delta_max` | 10.0 | Algorithm 4 | Maximum tolerance before refresh (hybrid mode) |
+| `refresh_period` | 0 | Algorithm 4 | Iterations between forced refresh (0 = disabled) |
+| `use_accel_qn` | FALSE | Algorithm 4b | Enable Nesterov acceleration (O(k⁻²) rate) |
 | **Step Bounds** ||||
 | `step_max` | NULL | Safeguard | Maximum step (NULL = adaptive) |
 | `step_max_factor` | 10 | Safeguard | Adaptive factor |

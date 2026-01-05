@@ -53,6 +53,11 @@
 #' * `momentum_alpha1`: Linear step scaling constant (default: 0.1, Gao's α₁)
 #' * `momentum_alpha2`: Quadratic step scaling constant (default: 1.0, Gao's α₂)
 #' * `trace`: Print iteration progress (default: FALSE)
+#' * `use_qn`: Use quasi-Newton Hessian approximation (default: FALSE).
+#'   When TRUE, routes to arcopt_qn which uses QN updates instead of exact
+#'   Hessians. See `qn_method` for available QN methods.
+#' * `qn_method`: QN update method - "sr1", "bfgs", "lbfgs", "lsr1"
+#'   (default: "sr1"). Only used when `use_qn = TRUE`.
 #'
 #' @return A list with components:
 #' * `par`: Optimal parameter vector
@@ -118,6 +123,12 @@ arcopt <- function(x0, fn, gr, hess = NULL,
 
   if (any(lower >= upper)) {
     stop("lower must be strictly less than upper for all parameters")
+  }
+
+  # Route to QN optimizer if requested
+  use_qn <- if (!is.null(control$use_qn)) control$use_qn else FALSE
+  if (use_qn) {
+    return(arcopt_qn(x0, fn, gr, hess, lower, upper, control))
   }
 
   # Default control parameters

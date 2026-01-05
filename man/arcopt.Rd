@@ -91,6 +91,11 @@ reduce iterations on some problems while increasing them on others.
 \item \code{momentum_alpha1}: Linear step scaling constant (default: 0.1, Gao's α₁)
 \item \code{momentum_alpha2}: Quadratic step scaling constant (default: 1.0, Gao's α₂)
 \item \code{trace}: Print iteration progress (default: FALSE)
+\item \code{use_qn}: Use quasi-Newton Hessian approximation (default: FALSE).
+When TRUE, routes to arcopt_qn which uses QN updates instead of exact
+Hessians. See \code{qn_method} for available QN methods.
+\item \code{qn_method}: QN update method - "sr1", "bfgs", "lbfgs", "lsr1"
+(default: "sr1"). Only used when \code{use_qn = TRUE}.
 }
 }
 }
