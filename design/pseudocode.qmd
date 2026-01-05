@@ -476,6 +476,7 @@ PROCEDURE:
 
   k ← 0
   prev_rejected ← FALSE              [track if previous step was rejected]
+  prev_used_newton ← FALSE           [track if previous iteration used Newton]
   consecutive_negative_rho ← 0       [for monitoring theoretical guarantees]
   IF trace ≥ 1 THEN initialize_trace_storage() END IF
 
@@ -515,6 +516,14 @@ PROCEDURE:
        step_type ← "cubic"    [default]
        IF NOT prev_rejected THEN
          (newton_success, s_newton, pred_quad) ← try_newton_step(g_k, H_k)
+
+         [Sigma reset safeguard: If previous Newton succeeded but current fails,
+          Hessian likely changed from PD to indefinite. Reset sigma to provide
+          adequate regularization for cubic solver in new region.]
+         IF NOT newton_success AND prev_used_newton THEN
+           σ_k ← σ_0    [reset to initial value]
+         END IF
+
          IF newton_success THEN
            [Evaluate Newton trial point]
            x_trial ← x_k + s_newton
@@ -619,6 +628,9 @@ PROCEDURE:
        IF refresh > 0 AND k MOD refresh = 0 THEN
          PRINT iter=k, f=f_k, ||g||=||g_k||_∞, σ=σ_k, step=step_type, time=iter_time
        END IF
+
+       [Track if current iteration used Newton for next iteration's sigma reset]
+       prev_used_newton ← (step_type = "newton")
 
     k ← k + 1
   END WHILE

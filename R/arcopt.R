@@ -150,6 +150,7 @@ arcopt <- function(x0, fn, gr, hess = NULL,
   sigma_current <- control$sigma0
   iter <- 0
   prev_rejected <- FALSE
+  prev_used_newton <- FALSE  # Track if previous iteration used Newton
   fn_evals <- 0
   gr_evals <- 0
   hess_evals <- 0
@@ -284,6 +285,12 @@ arcopt <- function(x0, fn, gr, hess = NULL,
 
     if (!prev_rejected && !is.null(hess)) {
       newton_result <- try_newton_step(g_current, h_current)
+
+      # If previous iteration used Newton but current Cholesky fails (indefinite H),
+      # reset sigma to initial value to provide adequate regularization
+      if (!newton_result$success && prev_used_newton) {
+        sigma_current <- control$sigma0
+      }
 
       if (newton_result$success) {
         # Newton step succeeded (H is positive definite)
@@ -611,6 +618,9 @@ arcopt <- function(x0, fn, gr, hess = NULL,
       # Reset timer for next iteration
       iter_start_time <- Sys.time()
     }
+
+    # Track if current iteration used Newton for next iteration's sigma reset logic
+    prev_used_newton <- used_newton
 
     iter <- iter + 1
   }
