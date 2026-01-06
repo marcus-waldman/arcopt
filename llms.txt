@@ -1,468 +1,228 @@
 # arcopt ![](reference/figures/logo.png)
 
-> **Robust optimization via Adaptive Regularization with Cubics (ARC)**
+> **Robust nonlinear optimization for R**
 
 When [`optim()`](https://rdrr.io/r/stats/optim.html) fails on your
-ill-conditioned, nonconvex statistical model with indefinite Hessians
-and saddle points, **arcopt** is designed to succeed.
-
-## Why ARC?
-
-Standard optimizers (Newton, BFGS, trust-region) struggle when the
-Hessian is indefinite or nearly singular—common scenarios in:
-
-- Maximum likelihood estimation with complex likelihoods
-- Posterior mode finding (MAP) in hierarchical models
-- Nonlinear regression with poor identifiability
-- Models involving numerical integration or simulation
-
-**Cubic regularization** replaces the quadratic trust-region model with
-a cubic term that automatically handles negative curvature without
-explicit eigenvalue computations or line searches.
-
-### The Math
-
-Instead of minimizing the quadratic model:
-
-    m(s) = f + g^T s + (1/2) s^T H s
-
-ARC minimizes the **cubic model**:
-
-    m(s) = f + g^T s + (1/2) s^T H s + (σ/3)||s||^3
-
-The cubic term provides **automatic regularization**: when `H` has
-negative eigenvalues, the `||s||^3` term prevents the step from growing
-unbounded in directions of negative curvature.
-
-**Result**: Provably escapes saddle points and converges to local minima
-even with indefinite Hessians.
+ill-conditioned model, **arcopt** is designed to succeed. It uses
+Adaptive Regularization with Cubics (ARC) to handle indefinite Hessians
+and escape saddle points automatically.
 
 ## Installation
 
 ``` r
-# Install development version from GitHub
+# Install from GitHub
 pak::pak("marcus-waldman/arcopt")
 
 # Or with devtools
 devtools::install_github("marcus-waldman/arcopt")
 ```
 
-**Requirements**: R ≥ 4.0
-
 ## Quick Start
 
 ``` r
 library(arcopt)
 
-# Classic Rosenbrock function (banana-shaped valley)
-rosenbrock <- function(x) {
-  (1 - x[1])^2 + 100 * (x[2] - x[1]^2)^2
-}
-
-rosenbrock_gr <- function(x) {
-  c(-2 * (1 - x[1]) - 400 * x[1] * (x[2] - x[1]^2),
-    200 * (x[2] - x[1]^2))
-}
-
-rosenbrock_hess <- function(x) {
-  matrix(c(
+# Rosenbrock function - a classic difficult optimization problem
+result <- arcopt(
+  x0 = c(-1.2, 1),
+  fn = function(x) (1 - x[1])^2 + 100 * (x[2] - x[1]^2)^2,
+  gr = function(x) c(
+    -2 * (1 - x[1]) - 400 * x[1] * (x[2] - x[1]^2),
+    200 * (x[2] - x[1]^2)
+  ),
+  hess = function(x) matrix(c(
     1200 * x[1]^2 - 400 * x[2] + 2, -400 * x[1],
     -400 * x[1], 200
   ), 2, 2)
-}
-
-# Optimize from difficult starting point
-result <- arcopt(
-  x0 = c(-1.2, 1),
-  fn = rosenbrock,
-  gr = rosenbrock_gr,
-  hess = rosenbrock_hess
 )
 
-print(result$par)      # [1] 1.0000000 1.0000000
-print(result$value)    # [1] 7.067483e-18
+result$par
+#> [1] 1 1
 ```
 
-## Why Provide the Hessian?
+## Two Modes: Exact Hessian vs Quasi-Newton
 
-**arcopt** is **Hessian-centric** by design. Providing an analytic
-Hessian is strongly recommended because:
+**arcopt** offers two optimization strategies:
 
-1.  **Cubic regularization depends critically on accurate curvature**
-2.  **Statistical models often have tractable second derivatives**
-    (likelihood functions, posteriors)
-3.  **Fewer total iterations** compensate for Hessian computation cost
-4.  **Automatic differentiation** tools (e.g., torch, autodiffr) make
-    this easy
+### Mode 1: Exact Hessian (Default)
+
+Best when you can compute the Hessian analytically or via automatic
+differentiation.
 
 ``` r
-# Option 1: Analytic Hessian (best)
-arcopt(x0, fn, gr, hess = hess_analytic)
-
-# Option 2: Finite differences (convenience, slower but robust)
-arcopt(x0, fn, gr, hess = NULL, control = list(use_fd = TRUE))
-
-# Option 3: Matrix-free (large-scale, future work)
-# See design/scalable-arcs.qmd
+# Provide fn, gr, and hess
+result <- arcopt(x0, fn, gr, hess)
 ```
 
-## Handling Hard Problems
+### Mode 2: Quasi-Newton (No Hessian Required)
 
-### Example 1: Indefinite Hessian at Starting Point
+Best when computing the Hessian is expensive or unavailable. Uses
+BFGS/SR1 approximations.
 
 ``` r
-# Saddle point function: f(x, y) = x^2 - y^2
-saddle_fn <- function(x) x[1]^2 - x[2]^2
-saddle_gr <- function(x) c(2*x[1], -2*x[2])
-saddle_hess <- function(x) diag(c(2, -2))  # Indefinite!
+# Just provide fn and gr - no Hessian needed
+result <- arcopt(x0, fn, gr, control = list(use_qn = TRUE))
+```
 
-# Starting near a saddle point (0, 0)
+### Which Mode Should I Use?
+
+| Scenario                           | Recommendation              |
+|------------------------------------|-----------------------------|
+| Analytic Hessian available         | Use exact Hessian (default) |
+| Hessian via autodiff (torch, Stan) | Use exact Hessian           |
+| Hessian expensive (n \> 100)       | Use `use_qn = TRUE`         |
+| No Hessian function                | Use `use_qn = TRUE`         |
+
+## Benchmark Results
+
+Tested on 8 standard functions with 10 starting points each (80 test
+cases):
+
+| Method            | Convergence | Avg Iterations | Hessian Evals |
+|-------------------|-------------|----------------|---------------|
+| **Exact Hessian** | 100%        | 22             | 1,443         |
+| **BFGS QN**       | 100%        | 28             | 0             |
+| **SR1 QN**        | 99%         | 61             | 0             |
+
+**BFGS Quasi-Newton** achieves the same 100% convergence as exact
+Hessian with only 26% more iterations and zero Hessian evaluations.
+
+## Box Constraints
+
+``` r
+# Optimize with bounds: 0 <= x <= 0.5
 result <- arcopt(
   x0 = c(0.1, 0.1),
-  fn = saddle_fn,
-  gr = saddle_gr,
-  hess = saddle_hess,
-  lower = c(-5, 0),  # Constrain y >= 0 to make problem bounded
-  upper = c(5, 5)
-)
-
-# ARC automatically escapes the saddle and finds boundary minimum
-print(result$par)      # [1]  0.04041027  5.00000000 (boundary optimum)
-print(result$converged) # [1] TRUE
-```
-
-### Example 2: Ill-Conditioned Quadratic
-
-``` r
-# Highly elongated ellipse (condition number ≈ 10^6)
-Q <- matrix(c(1e6, 0, 0, 1), 2, 2)
-
-ill_fn <- function(x) 0.5 * t(x) %*% Q %*% x
-ill_gr <- function(x) Q %*% x
-ill_hess <- function(x) Q
-
-# Poor scaling challenges gradient-only methods
-result <- arcopt(
-  x0 = c(100, 100),
-  fn = ill_fn,
-  gr = ill_gr,
-  hess = ill_hess
-)
-
-print(result$par)        # [1] 0 0 (success!)
-print(result$iterations) # [1] 1 (one Newton step)
-```
-
-### Example 3: Box-Constrained Optimization
-
-``` r
-# Minimize Rosenbrock subject to 0 <= x <= 0.5
-result <- arcopt(
-  x0 = c(0.1, 0.1),
-  fn = rosenbrock,
-  gr = rosenbrock_gr,
-  hess = rosenbrock_hess,
+  fn = fn, gr = gr, hess = hess,
   lower = c(0, 0),
   upper = c(0.5, 0.5)
 )
-
-print(result$par)  # [1] 0.5000000 0.2449980 (constrained optimum)
 ```
 
-## Benchmark Performance
+## Why ARC?
 
-We tested **arcopt** on 8 standard optimization test functions with 10
-starting points each (80 cases total):
+Standard optimizers struggle when the Hessian is indefinite or nearly
+singular—common in:
 
-| Function                    | Difficulty | arcopt  | Notes                       |
-|-----------------------------|------------|---------|-----------------------------|
-| **Sphere**                  | Easy       | 10/10 ✓ | Convex quadratic            |
-| **Sum of Squares**          | Easy       | 10/10 ✓ | Weighted quadratic          |
-| **Rotated Hyper-Ellipsoid** | Medium     | 10/10 ✓ | Ill-conditioned             |
-| **Trid**                    | Medium     | 10/10 ✓ | Tridiagonal structure       |
-| **Powell Singular**         | Hard       | 6/10 ✓  | Singular Hessian at optimum |
-| **Rosenbrock**              | Hard       | 8/10 ✓  | Narrow curved valley        |
-| **Dixon-Price**             | Hard       | 0/10 ✗  | Known pathological case     |
-| **Bohachevsky**             | Hard       | 0/10 ✗  | Many local minima           |
+- Maximum likelihood with complex likelihoods
+- Bayesian posterior modes (MAP estimation)
+- Nonlinear mixed effects models
+- Any model with poor identifiability
 
-**Overall**: 54/80 correct solutions (67.5%) with **100% convergence**
-(80/80)
+**Cubic regularization** automatically handles negative curvature
+without line searches or trust-region adjustments. It provably escapes
+saddle points and converges to local minima.
 
-Failed cases are expected: - **Dixon-Price**: Requires global
-optimization (many local minima) - **Bohachevsky**: Highly multimodal,
-needs basin-hopping or simulated annealing - These failures are **not
-bugs**—local optimizers are *designed* to find local minima
+### The Key Idea
 
-### Efficiency Metrics
+Instead of the quadratic model used by Newton’s method:
 
-Median performance on successful cases:
+    m(s) = f + g's + (1/2) s'Hs
 
-| Metric         | Value       |
-|----------------|-------------|
-| Iterations     | 1-2         |
-| Function evals | 2-3         |
-| Gradient evals | 2-3         |
-| Hessian evals  | 2-3         |
-| Time           | \<0.001 sec |
+ARC adds a cubic term:
 
-**arcopt** typically converges in 1-2 iterations on well-scaled
-problems.
+    m(s) = f + g's + (1/2) s'Hs + (σ/3)||s||³
 
-## Advanced Features
+This cubic term prevents unbounded steps when the Hessian has negative
+eigenvalues.
 
-### Cubic Subproblem Solver
-
-arcopt uses **eigendecomposition-based cubic solver** (Algorithm 5a):
-
-- Handles indefinite Hessians robustly via eigenvalue decomposition
-- Explicit negative curvature detection
-- Direct implementation of Cartis-Gould-Toint theory
+## Common Options
 
 ``` r
-# Default (uses eigendecomposition)
-result <- arcopt(x0, fn, gr, hess)
+arcopt(x0, fn, gr, hess,
+  control = list(
+    # Quasi-Newton mode (no Hessian needed)
+    use_qn = TRUE,
+    qn_method = "bfgs",      # or "sr1", "lbfgs", "lsr1"
 
-# Explicit solver selection
-result <- arcopt(x0, fn, gr, hess, control = list(cubic_solver = "eigen"))
+    # Convergence tolerances
+    gtol_abs = 1e-5,         # Gradient norm
+    maxit = 1000,            # Max iterations
+
+    # Momentum (enabled by default, helps ill-conditioned problems)
+    use_momentum = TRUE,
+
+    # Diagnostics
+    trace = 1                # Print progress
+  )
+)
 ```
 
-For large-scale matrix-free optimization (n \> 500), see
-`design/scalable-arcs.qmd` for deferred Lanczos-based solvers.
+## Comparison with optim()
 
-### Momentum Acceleration
-
-Momentum is **enabled by default** and can dramatically improve
-performance on ill-conditioned problems:
-
-``` r
-# Momentum is on by default (Algorithm 3: ARCm)
-arcopt(...)  # Momentum enabled
-
-# Disable if needed
-arcopt(..., control = list(use_momentum = FALSE))
-
-# Adaptive momentum parameter: β_k = min(β_max, c1/||s||, c2/||g||)
-# - Automatically decreases near optimum to prevent oscillation
-# - No additional function evaluations required
-# - Can reduce iterations by 30-90% on ill-conditioned problems
-```
-
-**Example: Powell Singular (singular Hessian at optimum)**
-
-``` r
-# Without momentum: stagnates at distance 0.006 from optimum
-result_basic <- arcopt(x0, fn, gr, hess)
-# Distance: 0.00604, ||g||: 5.5e-06
-
-# With momentum: navigates singular region successfully
-result_momentum <- arcopt(x0, fn, gr, hess,
-                          control = list(use_momentum = TRUE))
-# Distance: 0.00356 (41% improvement!), ||g||: 1.0e-06 (5x better)
-
-# Aggressive momentum for very ill-conditioned problems
-result_aggressive <- arcopt(x0, fn, gr, hess,
-                            control = list(
-                              use_momentum = TRUE,
-                              momentum_max = 0.95,
-                              momentum_c1 = 0.05,
-                              momentum_c2 = 0.05
-                            ))
-# Distance: 0.00184 (70% improvement!), ||g||: 1.8e-07 (30x better)
-```
-
-**When to use momentum:** - Ill-conditioned Hessians (condition number
-\> 10^6) - Singular or nearly singular Hessians at optimum - Problems
-where standard ARC stagnates before reaching convergence - No downside:
-automatically vanishes near optimum via adaptive β_k
-
-**Theory**: Based on Gao et al. (2022) and Wang et al. (2018). Maintains
-optimal O(ε^(-3/2)) complexity while providing 30-90% iteration
-reduction in practice.
-
-### Regularization Parameter Control
-
-``` r
-# Default: Automatic sigma adaptation (recommended)
-arcopt(..., control = list(sigma0 = 1.0))
-
-# Conservative (more regularization, slower convergence)
-arcopt(..., control = list(
-  sigma0 = 10.0,
-  gamma1 = 0.5,   # Decrease factor
-  gamma2 = 2.0    # Increase factor
-))
-
-# Aggressive (less regularization, faster if Hessian is good)
-arcopt(..., control = list(
-  sigma0 = 0.1,
-  gamma1 = 0.25,
-  gamma2 = 4.0
-))
-```
-
-### Convergence Tolerance
-
-``` r
-# Tighter convergence (for high-precision needs)
-arcopt(..., control = list(
-  gtol_abs = 1e-8,   # Gradient norm tolerance
-  ftol_abs = 1e-12,  # Function change tolerance
-  xtol_abs = 1e-10   # Parameter change tolerance
-))
-
-# Looser convergence (for exploratory analysis)
-arcopt(..., control = list(
-  gtol_abs = 1e-3,
-  ftol_abs = 1e-6,
-  xtol_abs = 1e-6
-))
-```
-
-### Diagnostic Output
-
-``` r
-result <- arcopt(..., control = list(trace = TRUE))
-
-# Iteration    f(x)         ||g||      sigma    step_type
-#     0    1.234e+02    5.67e+01    1.00e+00      -
-#     1    3.456e+01    2.34e+00    5.00e-01    cubic
-#     2    1.234e+00    5.67e-02    2.50e-01    newton
-#     3    1.234e-04    5.67e-06    1.25e-01    newton
-
-# Examine convergence diagnostics
-print(result$message)      # "gradient_abs" (why it stopped)
-print(result$iterations)   # Number of iterations
-print(result$evaluations)  # Function, gradient, Hessian counts
-print(result$hessian)      # Final Hessian (if hess provided)
-```
+| Feature                    | arcopt              | optim(BFGS)   | optim(L-BFGS-B)         |
+|----------------------------|---------------------|---------------|-------------------------|
+| Handles indefinite Hessian | ✓                   | ✗             | ✗                       |
+| Escapes saddle points      | ✓                   | ✗             | ✗                       |
+| Box constraints            | ✓                   | ✗             | ✓                       |
+| Hessian-free mode          | ✓                   | ✓             | ✓                       |
+| Best for                   | Complex likelihoods | Smooth convex | Large bound-constrained |
 
 ## When NOT to Use arcopt
 
-**arcopt** is a **local optimizer**. It is NOT suitable for:
+**arcopt** is a **local optimizer**. Use something else for:
 
-- **Global optimization** (many widely separated local minima)
-  - Use: `DEoptim`, `GenSA`, `nloptr::nloptr()` with ISRES
-- **Derivative-free optimization** (gradient/Hessian unavailable)
-  - Use: `nloptr::nloptr()` with COBYLA, `dfoptim::nmkb()`
-- **Large-scale optimization** (n \> 10,000 parameters without sparse
-  structure)
-  - Use: `lbfgs::lbfgs()`, `trustOptim::trust.optim()` with sparse
-    Hessian
-- **Linear/Quadratic programming** (special structure)
-  - Use: `lpSolve`, `quadprog`, `Rglpk`
+- **Global optimization**: Use `DEoptim`, `GenSA`, or `nloptr` with
+  global algorithms
+- **Derivative-free**: Use `nloptr` with COBYLA or `dfoptim`
+- **Very large scale** (n \> 10,000): Use `lbfgs` or sparse methods
+- **Linear/Quadratic programming**: Use `lpSolve`, `quadprog`
 
-**Best use case**: 2-500 parameters, nonconvex likelihood/posterior,
-analytic derivatives available, need robust convergence from poor
-starting points.
+**Best for**: 2-500 parameters, nonconvex objectives, need robust
+convergence.
 
-## Comparison with `optim()`
-
-| Feature             | `arcopt`                | `optim(method = "BFGS")` | `optim(method = "L-BFGS-B")`  |
-|---------------------|-------------------------|--------------------------|-------------------------------|
-| Indefinite Hessian  | ✓ Handles automatically | ✗ Can fail or diverge    | ✗ Can fail or diverge         |
-| Saddle point escape | ✓ Provably escapes      | ✗ Can get stuck          | ✗ Can get stuck               |
-| Requires Hessian    | ✓ Yes (analytic or FD)  | ✗ No (quasi-Newton)      | ✗ No (quasi-Newton)           |
-| Box constraints     | ✓ Native support        | ✗ No                     | ✓ Native support              |
-| Convergence theory  | ✓ Global for nonconvex  | ✓ Global for convex only | ✓ Global for convex only      |
-| Best for            | Complex likelihoods     | Smooth convex            | Large-scale bound-constrained |
-
-## API Reference
+## Return Value
 
 ``` r
-arcopt(
-  x0,                  # Initial parameter vector (length Q)
-  fn,                  # Function: fn(x) -> scalar
-  gr,                  # Gradient: gr(x) -> vector (length Q)
-  hess = NULL,         # Hessian: hess(x) -> matrix (Q × Q)
-  hess_vec = NULL,     # Hessian-vector product: hess_vec(v) -> H*v
-  lower = -Inf,        # Lower bounds (scalar or length Q)
-  upper = Inf,         # Upper bounds (scalar or length Q)
-  control = list()     # Control parameters (see ?arcopt)
-)
+result <- arcopt(x0, fn, gr, hess)
 
-# Returns list with:
-#   par          - Optimal parameter vector
-#   value        - Optimal function value
-#   gradient     - Gradient at optimum
-#   hessian      - Hessian at optimum (if hess provided)
-#   converged    - TRUE if convergence criteria met
-#   iterations   - Number of iterations
-#   evaluations  - List of fn/gr/hess evaluation counts
-#   message      - Convergence reason
+result$par          # Optimal parameters
+result$value        # Optimal function value
+result$gradient     # Gradient at solution
+result$hessian      # Hessian at solution (if provided)
+result$converged    # TRUE if converged
+result$iterations   # Number of iterations
+result$evaluations  # List: fn, gr, hess counts
+result$message      # Why it stopped
 ```
 
-### Control Parameters
+## References
 
-| Parameter      | Default  | Description                         |
-|----------------|----------|-------------------------------------|
-| `maxit`        | 1000     | Maximum iterations                  |
-| `gtol_abs`     | 1e-5     | Gradient norm tolerance             |
-| `ftol_abs`     | 1e-8     | Function change tolerance           |
-| `xtol_abs`     | 1e-8     | Parameter change tolerance          |
-| `sigma0`       | 1.0      | Initial regularization parameter    |
-| `cubic_solver` | “auto”   | Cubic solver: “auto” or “eigen”     |
-| `use_momentum` | **TRUE** | Enable momentum acceleration (ARCm) |
-| `momentum_max` | 0.9      | Maximum momentum parameter β        |
-| `momentum_c1`  | 0.1      | Step-size scaling constant          |
-| `momentum_c2`  | 0.1      | Gradient scaling constant           |
-| `trace`        | FALSE    | Print iteration progress            |
+**Adaptive Regularization with Cubics (ARC)**
 
-Full list:
-[`?arcopt`](https://marcus-waldman.github.io/arcopt/reference/arcopt.md)
+Cartis, C., Gould, N. I. M., & Toint, P. L. (2011). Adaptive cubic
+regularisation methods for unconstrained optimization. Part I:
+motivation, convergence and numerical results. *Mathematical
+Programming*, 127(2), 245-295.
 
-## Theory and References
+Nesterov, Y., & Polyak, B. T. (2006). Cubic regularization of Newton
+method and its global performance. *Mathematical Programming*, 108(1),
+177-205.
 
-**Cubic regularization** was introduced by:
+**Quasi-Newton with Cubic Regularization**
 
-> Nesterov, Y., & Polyak, B. T. (2006). Cubic regularization of Newton
-> method and its global performance. *Mathematical Programming*, 108(1),
-> 177-205.
+Kamzolov, D., Ziu, K., Agafonov, A., & Takáč, M. (2025). Accelerated
+Adaptive Cubic Regularized Quasi-Newton Methods. *Journal of
+Optimization Theory and Applications*, 208.
+<https://doi.org/10.1007/s10957-025-02804-3>
 
-**Adaptive regularization (ARC)** with practical algorithms:
+Kamzolov, D., Ziu, K., Agafonov, A., & Takáč, M. (2023). Cubic
+Regularization is the Key! The First Accelerated Quasi-Newton Method
+with a Global Convergence Rate of O(k^-2) for Convex Functions.
+*arXiv:2302.04987*.
 
-> Cartis, C., Gould, N. I. M., & Toint, P. L. (2011). Adaptive cubic
-> regularisation methods for unconstrained optimization. Part I:
-> motivation, convergence and numerical results. *Mathematical
-> Programming*, 127(2), 245-295.
-
-**Hard-case handling via eigendecomposition**:
-
-> Cartis, C., Gould, N. I. M., & Toint, P. L. (2011). Adaptive cubic
-> regularisation methods for unconstrained optimization. Part II:
-> worst-case function- and derivative-evaluation complexity.
-> *Mathematical Programming*, 130(2), 295-319.
-
-**Multi-shift CG-Lanczos approach (ARCqK)**:
-
-> Dussault, J. P., Migot, T., Orban, D., & Soares, A. (2024). Scalable
-> adaptive cubic regularization methods. *Mathematical Programming
-> Computation*, 16(4), 583-635.
-
-**Momentum acceleration (ARCm)**:
-
-> Gao, Y., Shi, B., & Zhang, L. (2022). Momentum-based adaptive cubic
-> regularization. *Optimization Methods and Software*, 37(5), 1627-1652.
-
-> Wang, Z., Zhou, Y., Liang, Y., & Lan, G. (2018). Cubic regularization
-> with momentum for nonconvex optimization. *UAI 2018*.
-
-**Convergence guarantees**: ARC converges to second-order critical
-points (gradient zero, Hessian positive semidefinite) with worst-case
-complexity O(ε^(-3/2)) for first-order stationarity and O(ε^(-3)) for
-second-order stationarity. Momentum acceleration maintains these
-guarantees while providing 30-90% iteration reduction in practice.
+Benson, H. Y., & Shanno, D. F. (2018). Cubic regularization in symmetric
+rank-1 quasi-Newton methods. *Mathematical Programming Computation*,
+10(4), 457-494.
 
 ## License
 
-MIT © 2026 Marcus Waldman
+MIT © 2025 Marcus Waldman
 
 ## Contributing
 
-Bug reports and feature requests welcome at:
+Issues and PRs welcome at:
 <https://github.com/marcus-waldman/arcopt/issues>
-
-Please include a minimal reproducible example and the output of
-[`sessionInfo()`](https://rdrr.io/r/utils/sessionInfo.html).
 
 # Package index
 

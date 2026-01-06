@@ -63,602 +63,285 @@
 <!-- badges: start -->
 
 <blockquote>
-<p><strong>Robust optimization via Adaptive Regularization with Cubics (ARC)</strong></p>
+<p><strong>Robust nonlinear optimization for R</strong></p>
 </blockquote>
-<p>When <code><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim()</a></code> fails on your ill-conditioned, nonconvex statistical model with indefinite Hessians and saddle points, <strong>arcopt</strong> is designed to succeed.</p>
-<div class="section level2">
-<h2 id="why-arc">Why ARC?<a class="anchor" aria-label="anchor" href="#why-arc"></a>
-</h2>
-<p>Standard optimizers (Newton, BFGS, trust-region) struggle when the Hessian is indefinite or nearly singular—common scenarios in:</p>
-<ul>
-<li>Maximum likelihood estimation with complex likelihoods</li>
-<li>Posterior mode finding (MAP) in hierarchical models</li>
-<li>Nonlinear regression with poor identifiability</li>
-<li>Models involving numerical integration or simulation</li>
-</ul>
-<p><strong>Cubic regularization</strong> replaces the quadratic trust-region model with a cubic term that automatically handles negative curvature without explicit eigenvalue computations or line searches.</p>
-<div class="section level3">
-<h3 id="the-math">The Math<a class="anchor" aria-label="anchor" href="#the-math"></a>
-</h3>
-<p>Instead of minimizing the quadratic model:</p>
-<pre><code>m(s) = f + g^T s + (1/2) s^T H s</code></pre>
-<p>ARC minimizes the <strong>cubic model</strong>:</p>
-<pre><code>m(s) = f + g^T s + (1/2) s^T H s + (σ/3)||s||^3</code></pre>
-<p>The cubic term provides <strong>automatic regularization</strong>: when <code>H</code> has negative eigenvalues, the <code>||s||^3</code> term prevents the step from growing unbounded in directions of negative curvature.</p>
-<p><strong>Result</strong>: Provably escapes saddle points and converges to local minima even with indefinite Hessians.</p>
-</div>
-</div>
+<p>When <code><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim()</a></code> fails on your ill-conditioned model, <strong>arcopt</strong> is designed to succeed. It uses Adaptive Regularization with Cubics (ARC) to handle indefinite Hessians and escape saddle points automatically.</p>
 <div class="section level2">
 <h2 id="installation">Installation<a class="anchor" aria-label="anchor" href="#installation"></a>
 </h2>
-<div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># Install development version from GitHub</span></span>
+<div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># Install from GitHub</span></span>
 <span><span class="fu">pak</span><span class="fu">::</span><span class="fu"><a href="https://pak.r-lib.org/reference/pak.html" class="external-link">pak</a></span><span class="op">(</span><span class="st">"marcus-waldman/arcopt"</span><span class="op">)</span></span>
 <span></span>
 <span><span class="co"># Or with devtools</span></span>
 <span><span class="fu">devtools</span><span class="fu">::</span><span class="fu">install_github</span><span class="op">(</span><span class="st">"marcus-waldman/arcopt"</span><span class="op">)</span></span></code></pre></div>
-<p><strong>Requirements</strong>: R ≥ 4.0</p>
 </div>
 <div class="section level2">
 <h2 id="quick-start">Quick Start<a class="anchor" aria-label="anchor" href="#quick-start"></a>
 </h2>
-<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://github.com/marcus-waldman/arcopt" class="external-link">arcopt</a></span><span class="op">)</span></span>
 <span></span>
-<span><span class="co"># Classic Rosenbrock function (banana-shaped valley)</span></span>
-<span><span class="va">rosenbrock</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">x</span><span class="op">)</span> <span class="op">{</span></span>
-<span>  <span class="op">(</span><span class="fl">1</span> <span class="op">-</span> <span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span><span class="op">)</span><span class="op">^</span><span class="fl">2</span> <span class="op">+</span> <span class="fl">100</span> <span class="op">*</span> <span class="op">(</span><span class="va">x</span><span class="op">[</span><span class="fl">2</span><span class="op">]</span> <span class="op">-</span> <span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span><span class="op">^</span><span class="fl">2</span><span class="op">)</span><span class="op">^</span><span class="fl">2</span></span>
-<span><span class="op">}</span></span>
-<span></span>
-<span><span class="va">rosenbrock_gr</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">x</span><span class="op">)</span> <span class="op">{</span></span>
-<span>  <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="op">-</span><span class="fl">2</span> <span class="op">*</span> <span class="op">(</span><span class="fl">1</span> <span class="op">-</span> <span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span><span class="op">)</span> <span class="op">-</span> <span class="fl">400</span> <span class="op">*</span> <span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span> <span class="op">*</span> <span class="op">(</span><span class="va">x</span><span class="op">[</span><span class="fl">2</span><span class="op">]</span> <span class="op">-</span> <span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span><span class="op">^</span><span class="fl">2</span><span class="op">)</span>,</span>
-<span>    <span class="fl">200</span> <span class="op">*</span> <span class="op">(</span><span class="va">x</span><span class="op">[</span><span class="fl">2</span><span class="op">]</span> <span class="op">-</span> <span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span><span class="op">^</span><span class="fl">2</span><span class="op">)</span><span class="op">)</span></span>
-<span><span class="op">}</span></span>
-<span></span>
-<span><span class="va">rosenbrock_hess</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">x</span><span class="op">)</span> <span class="op">{</span></span>
-<span>  <span class="fu"><a href="https://rdrr.io/r/base/matrix.html" class="external-link">matrix</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
+<span><span class="co"># Rosenbrock function - a classic difficult optimization problem</span></span>
+<span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span></span>
+<span>  x0 <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="op">-</span><span class="fl">1.2</span>, <span class="fl">1</span><span class="op">)</span>,</span>
+<span>  fn <span class="op">=</span> <span class="kw">function</span><span class="op">(</span><span class="va">x</span><span class="op">)</span> <span class="op">(</span><span class="fl">1</span> <span class="op">-</span> <span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span><span class="op">)</span><span class="op">^</span><span class="fl">2</span> <span class="op">+</span> <span class="fl">100</span> <span class="op">*</span> <span class="op">(</span><span class="va">x</span><span class="op">[</span><span class="fl">2</span><span class="op">]</span> <span class="op">-</span> <span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span><span class="op">^</span><span class="fl">2</span><span class="op">)</span><span class="op">^</span><span class="fl">2</span>,</span>
+<span>  gr <span class="op">=</span> <span class="kw">function</span><span class="op">(</span><span class="va">x</span><span class="op">)</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
+<span>    <span class="op">-</span><span class="fl">2</span> <span class="op">*</span> <span class="op">(</span><span class="fl">1</span> <span class="op">-</span> <span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span><span class="op">)</span> <span class="op">-</span> <span class="fl">400</span> <span class="op">*</span> <span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span> <span class="op">*</span> <span class="op">(</span><span class="va">x</span><span class="op">[</span><span class="fl">2</span><span class="op">]</span> <span class="op">-</span> <span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span><span class="op">^</span><span class="fl">2</span><span class="op">)</span>,</span>
+<span>    <span class="fl">200</span> <span class="op">*</span> <span class="op">(</span><span class="va">x</span><span class="op">[</span><span class="fl">2</span><span class="op">]</span> <span class="op">-</span> <span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span><span class="op">^</span><span class="fl">2</span><span class="op">)</span></span>
+<span>  <span class="op">)</span>,</span>
+<span>  hess <span class="op">=</span> <span class="kw">function</span><span class="op">(</span><span class="va">x</span><span class="op">)</span> <span class="fu"><a href="https://rdrr.io/r/base/matrix.html" class="external-link">matrix</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
 <span>    <span class="fl">1200</span> <span class="op">*</span> <span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span><span class="op">^</span><span class="fl">2</span> <span class="op">-</span> <span class="fl">400</span> <span class="op">*</span> <span class="va">x</span><span class="op">[</span><span class="fl">2</span><span class="op">]</span> <span class="op">+</span> <span class="fl">2</span>, <span class="op">-</span><span class="fl">400</span> <span class="op">*</span> <span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span>,</span>
 <span>    <span class="op">-</span><span class="fl">400</span> <span class="op">*</span> <span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span>, <span class="fl">200</span></span>
 <span>  <span class="op">)</span>, <span class="fl">2</span>, <span class="fl">2</span><span class="op">)</span></span>
-<span><span class="op">}</span></span>
-<span></span>
-<span><span class="co"># Optimize from difficult starting point</span></span>
-<span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span></span>
-<span>  x0 <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="op">-</span><span class="fl">1.2</span>, <span class="fl">1</span><span class="op">)</span>,</span>
-<span>  fn <span class="op">=</span> <span class="va">rosenbrock</span>,</span>
-<span>  gr <span class="op">=</span> <span class="va">rosenbrock_gr</span>,</span>
-<span>  hess <span class="op">=</span> <span class="va">rosenbrock_hess</span></span>
 <span><span class="op">)</span></span>
 <span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">par</span><span class="op">)</span>      <span class="co"># [1] 1.0000000 1.0000000</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">value</span><span class="op">)</span>    <span class="co"># [1] 7.067483e-18</span></span></code></pre></div>
+<span><span class="va">result</span><span class="op">$</span><span class="va">par</span></span>
+<span><span class="co">#&gt; [1] 1 1</span></span></code></pre></div>
 </div>
 <div class="section level2">
-<h2 id="why-provide-the-hessian">Why Provide the Hessian?<a class="anchor" aria-label="anchor" href="#why-provide-the-hessian"></a>
+<h2 id="two-modes-exact-hessian-vs-quasi-newton">Two Modes: Exact Hessian vs Quasi-Newton<a class="anchor" aria-label="anchor" href="#two-modes-exact-hessian-vs-quasi-newton"></a>
 </h2>
-<p><strong>arcopt</strong> is <strong>Hessian-centric</strong> by design. Providing an analytic Hessian is strongly recommended because:</p>
-<ol style="list-style-type: decimal">
-<li><strong>Cubic regularization depends critically on accurate curvature</strong></li>
-<li>
-<strong>Statistical models often have tractable second derivatives</strong> (likelihood functions, posteriors)</li>
-<li>
-<strong>Fewer total iterations</strong> compensate for Hessian computation cost</li>
-<li>
-<strong>Automatic differentiation</strong> tools (e.g., torch, autodiffr) make this easy</li>
-</ol>
+<p><strong>arcopt</strong> offers two optimization strategies:</p>
+<div class="section level3">
+<h3 id="mode-1-exact-hessian-default">Mode 1: Exact Hessian (Default)<a class="anchor" aria-label="anchor" href="#mode-1-exact-hessian-default"></a>
+</h3>
+<p>Best when you can compute the Hessian analytically or via automatic differentiation.</p>
+<div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># Provide fn, gr, and hess</span></span>
+<span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, <span class="va">hess</span><span class="op">)</span></span></code></pre></div>
+</div>
+<div class="section level3">
+<h3 id="mode-2-quasi-newton-no-hessian-required">Mode 2: Quasi-Newton (No Hessian Required)<a class="anchor" aria-label="anchor" href="#mode-2-quasi-newton-no-hessian-required"></a>
+</h3>
+<p>Best when computing the Hessian is expensive or unavailable. Uses BFGS/SR1 approximations.</p>
+<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># Just provide fn and gr - no Hessian needed</span></span>
+<span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>use_qn <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
+</div>
+<div class="section level3">
+<h3 id="which-mode-should-i-use">Which Mode Should I Use?<a class="anchor" aria-label="anchor" href="#which-mode-should-i-use"></a>
+</h3>
+<table class="table">
+<thead><tr class="header">
+<th>Scenario</th>
+<th>Recommendation</th>
+</tr></thead>
+<tbody>
+<tr class="odd">
+<td>Analytic Hessian available</td>
+<td>Use exact Hessian (default)</td>
+</tr>
+<tr class="even">
+<td>Hessian via autodiff (torch, Stan)</td>
+<td>Use exact Hessian</td>
+</tr>
+<tr class="odd">
+<td>Hessian expensive (n &gt; 100)</td>
+<td>Use <code>use_qn = TRUE</code>
+</td>
+</tr>
+<tr class="even">
+<td>No Hessian function</td>
+<td>Use <code>use_qn = TRUE</code>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="section level2">
+<h2 id="benchmark-results">Benchmark Results<a class="anchor" aria-label="anchor" href="#benchmark-results"></a>
+</h2>
+<p>Tested on 8 standard functions with 10 starting points each (80 test cases):</p>
+<table class="table">
+<thead><tr class="header">
+<th>Method</th>
+<th>Convergence</th>
+<th>Avg Iterations</th>
+<th>Hessian Evals</th>
+</tr></thead>
+<tbody>
+<tr class="odd">
+<td><strong>Exact Hessian</strong></td>
+<td>100%</td>
+<td>22</td>
+<td>1,443</td>
+</tr>
+<tr class="even">
+<td><strong>BFGS QN</strong></td>
+<td>100%</td>
+<td>28</td>
+<td>0</td>
+</tr>
+<tr class="odd">
+<td><strong>SR1 QN</strong></td>
+<td>99%</td>
+<td>61</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<p><strong>BFGS Quasi-Newton</strong> achieves the same 100% convergence as exact Hessian with only 26% more iterations and zero Hessian evaluations.</p>
+</div>
+<div class="section level2">
+<h2 id="box-constraints">Box Constraints<a class="anchor" aria-label="anchor" href="#box-constraints"></a>
+</h2>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># Option 1: Analytic Hessian (best)</span></span>
-<span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, hess <span class="op">=</span> <span class="va">hess_analytic</span><span class="op">)</span></span>
-<span></span>
-<span><span class="co"># Option 2: Finite differences (convenience, slower but robust)</span></span>
-<span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, hess <span class="op">=</span> <span class="cn">NULL</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>use_fd <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span></span>
-<span></span>
-<span><span class="co"># Option 3: Matrix-free (large-scale, future work)</span></span>
-<span><span class="co"># See design/scalable-arcs.qmd</span></span></code></pre></div>
-</div>
-<div class="section level2">
-<h2 id="handling-hard-problems">Handling Hard Problems<a class="anchor" aria-label="anchor" href="#handling-hard-problems"></a>
-</h2>
-<div class="section level3">
-<h3 id="example-1-indefinite-hessian-at-starting-point">Example 1: Indefinite Hessian at Starting Point<a class="anchor" aria-label="anchor" href="#example-1-indefinite-hessian-at-starting-point"></a>
-</h3>
-<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># Saddle point function: f(x, y) = x^2 - y^2</span></span>
-<span><span class="va">saddle_fn</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">x</span><span class="op">)</span> <span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span><span class="op">^</span><span class="fl">2</span> <span class="op">-</span> <span class="va">x</span><span class="op">[</span><span class="fl">2</span><span class="op">]</span><span class="op">^</span><span class="fl">2</span></span>
-<span><span class="va">saddle_gr</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">x</span><span class="op">)</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">2</span><span class="op">*</span><span class="va">x</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span>, <span class="op">-</span><span class="fl">2</span><span class="op">*</span><span class="va">x</span><span class="op">[</span><span class="fl">2</span><span class="op">]</span><span class="op">)</span></span>
-<span><span class="va">saddle_hess</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">x</span><span class="op">)</span> <span class="fu"><a href="https://rdrr.io/r/base/diag.html" class="external-link">diag</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">2</span>, <span class="op">-</span><span class="fl">2</span><span class="op">)</span><span class="op">)</span>  <span class="co"># Indefinite!</span></span>
-<span></span>
-<span><span class="co"># Starting near a saddle point (0, 0)</span></span>
+<code class="sourceCode R"><span><span class="co"># Optimize with bounds: 0 &lt;= x &lt;= 0.5</span></span>
 <span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span></span>
 <span>  x0 <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">0.1</span>, <span class="fl">0.1</span><span class="op">)</span>,</span>
-<span>  fn <span class="op">=</span> <span class="va">saddle_fn</span>,</span>
-<span>  gr <span class="op">=</span> <span class="va">saddle_gr</span>,</span>
-<span>  hess <span class="op">=</span> <span class="va">saddle_hess</span>,</span>
-<span>  lower <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="op">-</span><span class="fl">5</span>, <span class="fl">0</span><span class="op">)</span>,  <span class="co"># Constrain y &gt;= 0 to make problem bounded</span></span>
-<span>  upper <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">5</span>, <span class="fl">5</span><span class="op">)</span></span>
-<span><span class="op">)</span></span>
-<span></span>
-<span><span class="co"># ARC automatically escapes the saddle and finds boundary minimum</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">par</span><span class="op">)</span>      <span class="co"># [1]  0.04041027  5.00000000 (boundary optimum)</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">converged</span><span class="op">)</span> <span class="co"># [1] TRUE</span></span></code></pre></div>
-</div>
-<div class="section level3">
-<h3 id="example-2-ill-conditioned-quadratic">Example 2: Ill-Conditioned Quadratic<a class="anchor" aria-label="anchor" href="#example-2-ill-conditioned-quadratic"></a>
-</h3>
-<div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># Highly elongated ellipse (condition number ≈ 10^6)</span></span>
-<span><span class="va">Q</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/matrix.html" class="external-link">matrix</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">1e6</span>, <span class="fl">0</span>, <span class="fl">0</span>, <span class="fl">1</span><span class="op">)</span>, <span class="fl">2</span>, <span class="fl">2</span><span class="op">)</span></span>
-<span></span>
-<span><span class="va">ill_fn</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">x</span><span class="op">)</span> <span class="fl">0.5</span> <span class="op">*</span> <span class="fu"><a href="https://rdrr.io/r/base/t.html" class="external-link">t</a></span><span class="op">(</span><span class="va">x</span><span class="op">)</span> <span class="op"><a href="https://rdrr.io/r/base/matmult.html" class="external-link">%*%</a></span> <span class="va">Q</span> <span class="op"><a href="https://rdrr.io/r/base/matmult.html" class="external-link">%*%</a></span> <span class="va">x</span></span>
-<span><span class="va">ill_gr</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">x</span><span class="op">)</span> <span class="va">Q</span> <span class="op"><a href="https://rdrr.io/r/base/matmult.html" class="external-link">%*%</a></span> <span class="va">x</span></span>
-<span><span class="va">ill_hess</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">x</span><span class="op">)</span> <span class="va">Q</span></span>
-<span></span>
-<span><span class="co"># Poor scaling challenges gradient-only methods</span></span>
-<span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span></span>
-<span>  x0 <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">100</span>, <span class="fl">100</span><span class="op">)</span>,</span>
-<span>  fn <span class="op">=</span> <span class="va">ill_fn</span>,</span>
-<span>  gr <span class="op">=</span> <span class="va">ill_gr</span>,</span>
-<span>  hess <span class="op">=</span> <span class="va">ill_hess</span></span>
-<span><span class="op">)</span></span>
-<span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">par</span><span class="op">)</span>        <span class="co"># [1] 0 0 (success!)</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">iterations</span><span class="op">)</span> <span class="co"># [1] 1 (one Newton step)</span></span></code></pre></div>
-</div>
-<div class="section level3">
-<h3 id="example-3-box-constrained-optimization">Example 3: Box-Constrained Optimization<a class="anchor" aria-label="anchor" href="#example-3-box-constrained-optimization"></a>
-</h3>
-<div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># Minimize Rosenbrock subject to 0 &lt;= x &lt;= 0.5</span></span>
-<span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span></span>
-<span>  x0 <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">0.1</span>, <span class="fl">0.1</span><span class="op">)</span>,</span>
-<span>  fn <span class="op">=</span> <span class="va">rosenbrock</span>,</span>
-<span>  gr <span class="op">=</span> <span class="va">rosenbrock_gr</span>,</span>
-<span>  hess <span class="op">=</span> <span class="va">rosenbrock_hess</span>,</span>
+<span>  fn <span class="op">=</span> <span class="va">fn</span>, gr <span class="op">=</span> <span class="va">gr</span>, hess <span class="op">=</span> <span class="va">hess</span>,</span>
 <span>  lower <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">0</span>, <span class="fl">0</span><span class="op">)</span>,</span>
 <span>  upper <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">0.5</span>, <span class="fl">0.5</span><span class="op">)</span></span>
-<span><span class="op">)</span></span>
-<span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">par</span><span class="op">)</span>  <span class="co"># [1] 0.5000000 0.2449980 (constrained optimum)</span></span></code></pre></div>
-</div>
+<span><span class="op">)</span></span></code></pre></div>
 </div>
 <div class="section level2">
-<h2 id="benchmark-performance">Benchmark Performance<a class="anchor" aria-label="anchor" href="#benchmark-performance"></a>
+<h2 id="why-arc">Why ARC?<a class="anchor" aria-label="anchor" href="#why-arc"></a>
 </h2>
-<p>We tested <strong>arcopt</strong> on 8 standard optimization test functions with 10 starting points each (80 cases total):</p>
-<table class="table">
-<thead><tr class="header">
-<th>Function</th>
-<th>Difficulty</th>
-<th>arcopt</th>
-<th>Notes</th>
-</tr></thead>
-<tbody>
-<tr class="odd">
-<td><strong>Sphere</strong></td>
-<td>Easy</td>
-<td>10/10 ✓</td>
-<td>Convex quadratic</td>
-</tr>
-<tr class="even">
-<td><strong>Sum of Squares</strong></td>
-<td>Easy</td>
-<td>10/10 ✓</td>
-<td>Weighted quadratic</td>
-</tr>
-<tr class="odd">
-<td><strong>Rotated Hyper-Ellipsoid</strong></td>
-<td>Medium</td>
-<td>10/10 ✓</td>
-<td>Ill-conditioned</td>
-</tr>
-<tr class="even">
-<td><strong>Trid</strong></td>
-<td>Medium</td>
-<td>10/10 ✓</td>
-<td>Tridiagonal structure</td>
-</tr>
-<tr class="odd">
-<td><strong>Powell Singular</strong></td>
-<td>Hard</td>
-<td>6/10 ✓</td>
-<td>Singular Hessian at optimum</td>
-</tr>
-<tr class="even">
-<td><strong>Rosenbrock</strong></td>
-<td>Hard</td>
-<td>8/10 ✓</td>
-<td>Narrow curved valley</td>
-</tr>
-<tr class="odd">
-<td><strong>Dixon-Price</strong></td>
-<td>Hard</td>
-<td>0/10 ✗</td>
-<td>Known pathological case</td>
-</tr>
-<tr class="even">
-<td><strong>Bohachevsky</strong></td>
-<td>Hard</td>
-<td>0/10 ✗</td>
-<td>Many local minima</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Overall</strong>: 54/80 correct solutions (67.5%) with <strong>100% convergence</strong> (80/80)</p>
-<p>Failed cases are expected: - <strong>Dixon-Price</strong>: Requires global optimization (many local minima) - <strong>Bohachevsky</strong>: Highly multimodal, needs basin-hopping or simulated annealing - These failures are <strong>not bugs</strong>—local optimizers are <em>designed</em> to find local minima</p>
-<div class="section level3">
-<h3 id="efficiency-metrics">Efficiency Metrics<a class="anchor" aria-label="anchor" href="#efficiency-metrics"></a>
-</h3>
-<p>Median performance on successful cases:</p>
-<table class="table">
-<thead><tr class="header">
-<th>Metric</th>
-<th>Value</th>
-</tr></thead>
-<tbody>
-<tr class="odd">
-<td>Iterations</td>
-<td>1-2</td>
-</tr>
-<tr class="even">
-<td>Function evals</td>
-<td>2-3</td>
-</tr>
-<tr class="odd">
-<td>Gradient evals</td>
-<td>2-3</td>
-</tr>
-<tr class="even">
-<td>Hessian evals</td>
-<td>2-3</td>
-</tr>
-<tr class="odd">
-<td>Time</td>
-<td>&lt;0.001 sec</td>
-</tr>
-</tbody>
-</table>
-<p><strong>arcopt</strong> typically converges in 1-2 iterations on well-scaled problems.</p>
-</div>
-</div>
-<div class="section level2">
-<h2 id="advanced-features">Advanced Features<a class="anchor" aria-label="anchor" href="#advanced-features"></a>
-</h2>
-<div class="section level3">
-<h3 id="cubic-subproblem-solver">Cubic Subproblem Solver<a class="anchor" aria-label="anchor" href="#cubic-subproblem-solver"></a>
-</h3>
-<p>arcopt uses <strong>eigendecomposition-based cubic solver</strong> (Algorithm 5a):</p>
+<p>Standard optimizers struggle when the Hessian is indefinite or nearly singular—common in:</p>
 <ul>
-<li>Handles indefinite Hessians robustly via eigenvalue decomposition</li>
-<li>Explicit negative curvature detection</li>
-<li>Direct implementation of Cartis-Gould-Toint theory</li>
+<li>Maximum likelihood with complex likelihoods</li>
+<li>Bayesian posterior modes (MAP estimation)</li>
+<li>Nonlinear mixed effects models</li>
+<li>Any model with poor identifiability</li>
 </ul>
-<div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># Default (uses eigendecomposition)</span></span>
-<span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, <span class="va">hess</span><span class="op">)</span></span>
-<span></span>
-<span><span class="co"># Explicit solver selection</span></span>
-<span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, <span class="va">hess</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>cubic_solver <span class="op">=</span> <span class="st">"eigen"</span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
-<p>For large-scale matrix-free optimization (n &gt; 500), see <code>design/scalable-arcs.qmd</code> for deferred Lanczos-based solvers.</p>
-</div>
+<p><strong>Cubic regularization</strong> automatically handles negative curvature without line searches or trust-region adjustments. It provably escapes saddle points and converges to local minima.</p>
 <div class="section level3">
-<h3 id="momentum-acceleration">Momentum Acceleration<a class="anchor" aria-label="anchor" href="#momentum-acceleration"></a>
+<h3 id="the-key-idea">The Key Idea<a class="anchor" aria-label="anchor" href="#the-key-idea"></a>
 </h3>
-<p>Momentum is <strong>enabled by default</strong> and can dramatically improve performance on ill-conditioned problems:</p>
-<div class="sourceCode" id="cb10"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># Momentum is on by default (Algorithm 3: ARCm)</span></span>
-<span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">...</span><span class="op">)</span>  <span class="co"># Momentum enabled</span></span>
-<span></span>
-<span><span class="co"># Disable if needed</span></span>
-<span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">...</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>use_momentum <span class="op">=</span> <span class="cn">FALSE</span><span class="op">)</span><span class="op">)</span></span>
-<span></span>
-<span><span class="co"># Adaptive momentum parameter: β_k = min(β_max, c1/||s||, c2/||g||)</span></span>
-<span><span class="co"># - Automatically decreases near optimum to prevent oscillation</span></span>
-<span><span class="co"># - No additional function evaluations required</span></span>
-<span><span class="co"># - Can reduce iterations by 30-90% on ill-conditioned problems</span></span></code></pre></div>
-<p><strong>Example: Powell Singular (singular Hessian at optimum)</strong></p>
-<div class="sourceCode" id="cb11"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># Without momentum: stagnates at distance 0.006 from optimum</span></span>
-<span><span class="va">result_basic</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, <span class="va">hess</span><span class="op">)</span></span>
-<span><span class="co"># Distance: 0.00604, ||g||: 5.5e-06</span></span>
-<span></span>
-<span><span class="co"># With momentum: navigates singular region successfully</span></span>
-<span><span class="va">result_momentum</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, <span class="va">hess</span>,</span>
-<span>                          control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>use_momentum <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span></span>
-<span><span class="co"># Distance: 0.00356 (41% improvement!), ||g||: 1.0e-06 (5x better)</span></span>
-<span></span>
-<span><span class="co"># Aggressive momentum for very ill-conditioned problems</span></span>
-<span><span class="va">result_aggressive</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, <span class="va">hess</span>,</span>
-<span>                            control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span></span>
-<span>                              use_momentum <span class="op">=</span> <span class="cn">TRUE</span>,</span>
-<span>                              momentum_max <span class="op">=</span> <span class="fl">0.95</span>,</span>
-<span>                              momentum_c1 <span class="op">=</span> <span class="fl">0.05</span>,</span>
-<span>                              momentum_c2 <span class="op">=</span> <span class="fl">0.05</span></span>
-<span>                            <span class="op">)</span><span class="op">)</span></span>
-<span><span class="co"># Distance: 0.00184 (70% improvement!), ||g||: 1.8e-07 (30x better)</span></span></code></pre></div>
-<p><strong>When to use momentum:</strong> - Ill-conditioned Hessians (condition number &gt; 10^6) - Singular or nearly singular Hessians at optimum - Problems where standard ARC stagnates before reaching convergence - No downside: automatically vanishes near optimum via adaptive β_k</p>
-<p><strong>Theory</strong>: Based on Gao et al. (2022) and Wang et al. (2018). Maintains optimal O(ε^(-3/2)) complexity while providing 30-90% iteration reduction in practice.</p>
+<p>Instead of the quadratic model used by Newton’s method:</p>
+<pre><code>m(s) = f + g's + (1/2) s'Hs</code></pre>
+<p>ARC adds a cubic term:</p>
+<pre><code>m(s) = f + g's + (1/2) s'Hs + (σ/3)||s||³</code></pre>
+<p>This cubic term prevents unbounded steps when the Hessian has negative eigenvalues.</p>
 </div>
-<div class="section level3">
-<h3 id="regularization-parameter-control">Regularization Parameter Control<a class="anchor" aria-label="anchor" href="#regularization-parameter-control"></a>
-</h3>
-<div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># Default: Automatic sigma adaptation (recommended)</span></span>
-<span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">...</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>sigma0 <span class="op">=</span> <span class="fl">1.0</span><span class="op">)</span><span class="op">)</span></span>
-<span></span>
-<span><span class="co"># Conservative (more regularization, slower convergence)</span></span>
-<span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">...</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span></span>
-<span>  sigma0 <span class="op">=</span> <span class="fl">10.0</span>,</span>
-<span>  gamma1 <span class="op">=</span> <span class="fl">0.5</span>,   <span class="co"># Decrease factor</span></span>
-<span>  gamma2 <span class="op">=</span> <span class="fl">2.0</span>    <span class="co"># Increase factor</span></span>
-<span><span class="op">)</span><span class="op">)</span></span>
-<span></span>
-<span><span class="co"># Aggressive (less regularization, faster if Hessian is good)</span></span>
-<span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">...</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span></span>
-<span>  sigma0 <span class="op">=</span> <span class="fl">0.1</span>,</span>
-<span>  gamma1 <span class="op">=</span> <span class="fl">0.25</span>,</span>
-<span>  gamma2 <span class="op">=</span> <span class="fl">4.0</span></span>
-<span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
 </div>
-<div class="section level3">
-<h3 id="convergence-tolerance">Convergence Tolerance<a class="anchor" aria-label="anchor" href="#convergence-tolerance"></a>
-</h3>
-<div class="sourceCode" id="cb13"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># Tighter convergence (for high-precision needs)</span></span>
-<span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">...</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span></span>
-<span>  gtol_abs <span class="op">=</span> <span class="fl">1e-8</span>,   <span class="co"># Gradient norm tolerance</span></span>
-<span>  ftol_abs <span class="op">=</span> <span class="fl">1e-12</span>,  <span class="co"># Function change tolerance</span></span>
-<span>  xtol_abs <span class="op">=</span> <span class="fl">1e-10</span>   <span class="co"># Parameter change tolerance</span></span>
-<span><span class="op">)</span><span class="op">)</span></span>
+<div class="section level2">
+<h2 id="common-options">Common Options<a class="anchor" aria-label="anchor" href="#common-options"></a>
+</h2>
+<div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, <span class="va">hess</span>,</span>
+<span>  control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span></span>
+<span>    <span class="co"># Quasi-Newton mode (no Hessian needed)</span></span>
+<span>    use_qn <span class="op">=</span> <span class="cn">TRUE</span>,</span>
+<span>    qn_method <span class="op">=</span> <span class="st">"bfgs"</span>,      <span class="co"># or "sr1", "lbfgs", "lsr1"</span></span>
 <span></span>
-<span><span class="co"># Looser convergence (for exploratory analysis)</span></span>
-<span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">...</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span></span>
-<span>  gtol_abs <span class="op">=</span> <span class="fl">1e-3</span>,</span>
-<span>  ftol_abs <span class="op">=</span> <span class="fl">1e-6</span>,</span>
-<span>  xtol_abs <span class="op">=</span> <span class="fl">1e-6</span></span>
-<span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
+<span>    <span class="co"># Convergence tolerances</span></span>
+<span>    gtol_abs <span class="op">=</span> <span class="fl">1e-5</span>,         <span class="co"># Gradient norm</span></span>
+<span>    maxit <span class="op">=</span> <span class="fl">1000</span>,            <span class="co"># Max iterations</span></span>
+<span></span>
+<span>    <span class="co"># Momentum (enabled by default, helps ill-conditioned problems)</span></span>
+<span>    use_momentum <span class="op">=</span> <span class="cn">TRUE</span>,</span>
+<span></span>
+<span>    <span class="co"># Diagnostics</span></span>
+<span>    trace <span class="op">=</span> <span class="fl">1</span>                <span class="co"># Print progress</span></span>
+<span>  <span class="op">)</span></span>
+<span><span class="op">)</span></span></code></pre></div>
 </div>
-<div class="section level3">
-<h3 id="diagnostic-output">Diagnostic Output<a class="anchor" aria-label="anchor" href="#diagnostic-output"></a>
-</h3>
-<div class="sourceCode" id="cb14"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">...</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>trace <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span></span>
-<span></span>
-<span><span class="co"># Iteration    f(x)         ||g||      sigma    step_type</span></span>
-<span><span class="co">#     0    1.234e+02    5.67e+01    1.00e+00      -</span></span>
-<span><span class="co">#     1    3.456e+01    2.34e+00    5.00e-01    cubic</span></span>
-<span><span class="co">#     2    1.234e+00    5.67e-02    2.50e-01    newton</span></span>
-<span><span class="co">#     3    1.234e-04    5.67e-06    1.25e-01    newton</span></span>
-<span></span>
-<span><span class="co"># Examine convergence diagnostics</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">message</span><span class="op">)</span>      <span class="co"># "gradient_abs" (why it stopped)</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">iterations</span><span class="op">)</span>   <span class="co"># Number of iterations</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">evaluations</span><span class="op">)</span>  <span class="co"># Function, gradient, Hessian counts</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">hessian</span><span class="op">)</span>      <span class="co"># Final Hessian (if hess provided)</span></span></code></pre></div>
-</div>
+<div class="section level2">
+<h2 id="comparison-with-optim">Comparison with optim()<a class="anchor" aria-label="anchor" href="#comparison-with-optim"></a>
+</h2>
+<table class="table">
+<colgroup>
+<col width="19%">
+<col width="17%">
+<col width="27%">
+<col width="36%">
+</colgroup>
+<thead><tr class="header">
+<th>Feature</th>
+<th>arcopt</th>
+<th>optim(BFGS)</th>
+<th>optim(L-BFGS-B)</th>
+</tr></thead>
+<tbody>
+<tr class="odd">
+<td>Handles indefinite Hessian</td>
+<td>✓</td>
+<td>✗</td>
+<td>✗</td>
+</tr>
+<tr class="even">
+<td>Escapes saddle points</td>
+<td>✓</td>
+<td>✗</td>
+<td>✗</td>
+</tr>
+<tr class="odd">
+<td>Box constraints</td>
+<td>✓</td>
+<td>✗</td>
+<td>✓</td>
+</tr>
+<tr class="even">
+<td>Hessian-free mode</td>
+<td>✓</td>
+<td>✓</td>
+<td>✓</td>
+</tr>
+<tr class="odd">
+<td>Best for</td>
+<td>Complex likelihoods</td>
+<td>Smooth convex</td>
+<td>Large bound-constrained</td>
+</tr>
+</tbody>
+</table>
 </div>
 <div class="section level2">
 <h2 id="when-not-to-use-arcopt">When NOT to Use arcopt<a class="anchor" aria-label="anchor" href="#when-not-to-use-arcopt"></a>
 </h2>
-<p><strong>arcopt</strong> is a <strong>local optimizer</strong>. It is NOT suitable for:</p>
+<p><strong>arcopt</strong> is a <strong>local optimizer</strong>. Use something else for:</p>
 <ul>
 <li>
-<strong>Global optimization</strong> (many widely separated local minima)
-<ul>
-<li>Use: <code>DEoptim</code>, <code>GenSA</code>, <code>nloptr::nloptr()</code> with ISRES</li>
-</ul>
+<strong>Global optimization</strong>: Use <code>DEoptim</code>, <code>GenSA</code>, or <code>nloptr</code> with global algorithms</li>
+<li>
+<strong>Derivative-free</strong>: Use <code>nloptr</code> with COBYLA or <code>dfoptim</code>
 </li>
 <li>
-<strong>Derivative-free optimization</strong> (gradient/Hessian unavailable)
-<ul>
-<li>Use: <code>nloptr::nloptr()</code> with COBYLA, <code>dfoptim::nmkb()</code>
-</li>
-</ul>
-</li>
+<strong>Very large scale</strong> (n &gt; 10,000): Use <code>lbfgs</code> or sparse methods</li>
 <li>
-<strong>Large-scale optimization</strong> (n &gt; 10,000 parameters without sparse structure)
-<ul>
-<li>Use: <code>lbfgs::lbfgs()</code>, <code>trustOptim::trust.optim()</code> with sparse Hessian</li>
-</ul>
-</li>
-<li>
-<strong>Linear/Quadratic programming</strong> (special structure)
-<ul>
-<li>Use: <code>lpSolve</code>, <code>quadprog</code>, <code>Rglpk</code>
+<strong>Linear/Quadratic programming</strong>: Use <code>lpSolve</code>, <code>quadprog</code>
 </li>
 </ul>
-</li>
-</ul>
-<p><strong>Best use case</strong>: 2-500 parameters, nonconvex likelihood/posterior, analytic derivatives available, need robust convergence from poor starting points.</p>
+<p><strong>Best for</strong>: 2-500 parameters, nonconvex objectives, need robust convergence.</p>
 </div>
 <div class="section level2">
-<h2 id="comparison-with-optim">Comparison with <code>optim()</code>
-<a class="anchor" aria-label="anchor" href="#comparison-with-optim"></a>
+<h2 id="return-value">Return Value<a class="anchor" aria-label="anchor" href="#return-value"></a>
 </h2>
-<table class="table">
-<colgroup>
-<col width="12%">
-<col width="13%">
-<col width="34%">
-<col width="40%">
-</colgroup>
-<thead><tr class="header">
-<th>Feature</th>
-<th><code>arcopt</code></th>
-<th><code>optim(method = "BFGS")</code></th>
-<th><code>optim(method = "L-BFGS-B")</code></th>
-</tr></thead>
-<tbody>
-<tr class="odd">
-<td>Indefinite Hessian</td>
-<td>✓ Handles automatically</td>
-<td>✗ Can fail or diverge</td>
-<td>✗ Can fail or diverge</td>
-</tr>
-<tr class="even">
-<td>Saddle point escape</td>
-<td>✓ Provably escapes</td>
-<td>✗ Can get stuck</td>
-<td>✗ Can get stuck</td>
-</tr>
-<tr class="odd">
-<td>Requires Hessian</td>
-<td>✓ Yes (analytic or FD)</td>
-<td>✗ No (quasi-Newton)</td>
-<td>✗ No (quasi-Newton)</td>
-</tr>
-<tr class="even">
-<td>Box constraints</td>
-<td>✓ Native support</td>
-<td>✗ No</td>
-<td>✓ Native support</td>
-</tr>
-<tr class="odd">
-<td>Convergence theory</td>
-<td>✓ Global for nonconvex</td>
-<td>✓ Global for convex only</td>
-<td>✓ Global for convex only</td>
-</tr>
-<tr class="even">
-<td>Best for</td>
-<td>Complex likelihoods</td>
-<td>Smooth convex</td>
-<td>Large-scale bound-constrained</td>
-</tr>
-</tbody>
-</table>
-</div>
-<div class="section level2">
-<h2 id="api-reference">API Reference<a class="anchor" aria-label="anchor" href="#api-reference"></a>
-</h2>
-<div class="sourceCode" id="cb15"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span></span>
-<span>  <span class="va">x0</span>,                  <span class="co"># Initial parameter vector (length Q)</span></span>
-<span>  <span class="va">fn</span>,                  <span class="co"># Function: fn(x) -&gt; scalar</span></span>
-<span>  <span class="va">gr</span>,                  <span class="co"># Gradient: gr(x) -&gt; vector (length Q)</span></span>
-<span>  hess <span class="op">=</span> <span class="cn">NULL</span>,         <span class="co"># Hessian: hess(x) -&gt; matrix (Q × Q)</span></span>
-<span>  hess_vec <span class="op">=</span> <span class="cn">NULL</span>,     <span class="co"># Hessian-vector product: hess_vec(v) -&gt; H*v</span></span>
-<span>  lower <span class="op">=</span> <span class="op">-</span><span class="cn">Inf</span>,        <span class="co"># Lower bounds (scalar or length Q)</span></span>
-<span>  upper <span class="op">=</span> <span class="cn">Inf</span>,         <span class="co"># Upper bounds (scalar or length Q)</span></span>
-<span>  control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span><span class="op">)</span>     <span class="co"># Control parameters (see ?arcopt)</span></span>
-<span><span class="op">)</span></span>
+<div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, <span class="va">hess</span><span class="op">)</span></span>
 <span></span>
-<span><span class="co"># Returns list with:</span></span>
-<span><span class="co">#   par          - Optimal parameter vector</span></span>
-<span><span class="co">#   value        - Optimal function value</span></span>
-<span><span class="co">#   gradient     - Gradient at optimum</span></span>
-<span><span class="co">#   hessian      - Hessian at optimum (if hess provided)</span></span>
-<span><span class="co">#   converged    - TRUE if convergence criteria met</span></span>
-<span><span class="co">#   iterations   - Number of iterations</span></span>
-<span><span class="co">#   evaluations  - List of fn/gr/hess evaluation counts</span></span>
-<span><span class="co">#   message      - Convergence reason</span></span></code></pre></div>
-<div class="section level3">
-<h3 id="control-parameters">Control Parameters<a class="anchor" aria-label="anchor" href="#control-parameters"></a>
-</h3>
-<table class="table">
-<thead><tr class="header">
-<th>Parameter</th>
-<th>Default</th>
-<th>Description</th>
-</tr></thead>
-<tbody>
-<tr class="odd">
-<td><code>maxit</code></td>
-<td>1000</td>
-<td>Maximum iterations</td>
-</tr>
-<tr class="even">
-<td><code>gtol_abs</code></td>
-<td>1e-5</td>
-<td>Gradient norm tolerance</td>
-</tr>
-<tr class="odd">
-<td><code>ftol_abs</code></td>
-<td>1e-8</td>
-<td>Function change tolerance</td>
-</tr>
-<tr class="even">
-<td><code>xtol_abs</code></td>
-<td>1e-8</td>
-<td>Parameter change tolerance</td>
-</tr>
-<tr class="odd">
-<td><code>sigma0</code></td>
-<td>1.0</td>
-<td>Initial regularization parameter</td>
-</tr>
-<tr class="even">
-<td><code>cubic_solver</code></td>
-<td>“auto”</td>
-<td>Cubic solver: “auto” or “eigen”</td>
-</tr>
-<tr class="odd">
-<td><code>use_momentum</code></td>
-<td><strong>TRUE</strong></td>
-<td>Enable momentum acceleration (ARCm)</td>
-</tr>
-<tr class="even">
-<td><code>momentum_max</code></td>
-<td>0.9</td>
-<td>Maximum momentum parameter β</td>
-</tr>
-<tr class="odd">
-<td><code>momentum_c1</code></td>
-<td>0.1</td>
-<td>Step-size scaling constant</td>
-</tr>
-<tr class="even">
-<td><code>momentum_c2</code></td>
-<td>0.1</td>
-<td>Gradient scaling constant</td>
-</tr>
-<tr class="odd">
-<td><code>trace</code></td>
-<td>FALSE</td>
-<td>Print iteration progress</td>
-</tr>
-</tbody>
-</table>
-<p>Full list: <code><a href="reference/arcopt.html">?arcopt</a></code></p>
-</div>
+<span><span class="va">result</span><span class="op">$</span><span class="va">par</span>          <span class="co"># Optimal parameters</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">value</span>        <span class="co"># Optimal function value</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">gradient</span>     <span class="co"># Gradient at solution</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">hessian</span>      <span class="co"># Hessian at solution (if provided)</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">converged</span>    <span class="co"># TRUE if converged</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">iterations</span>   <span class="co"># Number of iterations</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">evaluations</span>  <span class="co"># List: fn, gr, hess counts</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">message</span>      <span class="co"># Why it stopped</span></span></code></pre></div>
 </div>
 <div class="section level2">
-<h2 id="theory-and-references">Theory and References<a class="anchor" aria-label="anchor" href="#theory-and-references"></a>
+<h2 id="references">References<a class="anchor" aria-label="anchor" href="#references"></a>
 </h2>
-<p><strong>Cubic regularization</strong> was introduced by:</p>
-<blockquote>
-<p>Nesterov, Y., &amp; Polyak, B. T. (2006). Cubic regularization of Newton method and its global performance. <em>Mathematical Programming</em>, 108(1), 177-205.</p>
-</blockquote>
-<p><strong>Adaptive regularization (ARC)</strong> with practical algorithms:</p>
-<blockquote>
+<p><strong>Adaptive Regularization with Cubics (ARC)</strong></p>
 <p>Cartis, C., Gould, N. I. M., &amp; Toint, P. L. (2011). Adaptive cubic regularisation methods for unconstrained optimization. Part I: motivation, convergence and numerical results. <em>Mathematical Programming</em>, 127(2), 245-295.</p>
-</blockquote>
-<p><strong>Hard-case handling via eigendecomposition</strong>:</p>
-<blockquote>
-<p>Cartis, C., Gould, N. I. M., &amp; Toint, P. L. (2011). Adaptive cubic regularisation methods for unconstrained optimization. Part II: worst-case function- and derivative-evaluation complexity. <em>Mathematical Programming</em>, 130(2), 295-319.</p>
-</blockquote>
-<p><strong>Multi-shift CG-Lanczos approach (ARCqK)</strong>:</p>
-<blockquote>
-<p>Dussault, J. P., Migot, T., Orban, D., &amp; Soares, A. (2024). Scalable adaptive cubic regularization methods. <em>Mathematical Programming Computation</em>, 16(4), 583-635.</p>
-</blockquote>
-<p><strong>Momentum acceleration (ARCm)</strong>:</p>
-<blockquote>
-<p>Gao, Y., Shi, B., &amp; Zhang, L. (2022). Momentum-based adaptive cubic regularization. <em>Optimization Methods and Software</em>, 37(5), 1627-1652.</p>
-</blockquote>
-<blockquote>
-<p>Wang, Z., Zhou, Y., Liang, Y., &amp; Lan, G. (2018). Cubic regularization with momentum for nonconvex optimization. <em>UAI 2018</em>.</p>
-</blockquote>
-<p><strong>Convergence guarantees</strong>: ARC converges to second-order critical points (gradient zero, Hessian positive semidefinite) with worst-case complexity O(ε^(-3/2)) for first-order stationarity and O(ε^(-3)) for second-order stationarity. Momentum acceleration maintains these guarantees while providing 30-90% iteration reduction in practice.</p>
+<p>Nesterov, Y., &amp; Polyak, B. T. (2006). Cubic regularization of Newton method and its global performance. <em>Mathematical Programming</em>, 108(1), 177-205.</p>
+<p><strong>Quasi-Newton with Cubic Regularization</strong></p>
+<p>Kamzolov, D., Ziu, K., Agafonov, A., &amp; Takáč, M. (2025). Accelerated Adaptive Cubic Regularized Quasi-Newton Methods. <em>Journal of Optimization Theory and Applications</em>, 208. <a href="https://doi.org/10.1007/s10957-025-02804-3" class="external-link uri">https://doi.org/10.1007/s10957-025-02804-3</a></p>
+<p>Kamzolov, D., Ziu, K., Agafonov, A., &amp; Takáč, M. (2023). Cubic Regularization is the Key! The First Accelerated Quasi-Newton Method with a Global Convergence Rate of O(k^-2) for Convex Functions. <em>arXiv:2302.04987</em>.</p>
+<p>Benson, H. Y., &amp; Shanno, D. F. (2018). Cubic regularization in symmetric rank-1 quasi-Newton methods. <em>Mathematical Programming Computation</em>, 10(4), 457-494.</p>
 </div>
 <div class="section level2">
 <h2 id="license">License<a class="anchor" aria-label="anchor" href="#license"></a>
 </h2>
-<p>MIT © 2026 Marcus Waldman</p>
+<p>MIT © 2025 Marcus Waldman</p>
 </div>
 <div class="section level2">
 <h2 id="contributing">Contributing<a class="anchor" aria-label="anchor" href="#contributing"></a>
 </h2>
-<p>Bug reports and feature requests welcome at: <a href="https://github.com/marcus-waldman/arcopt/issues" class="external-link uri">https://github.com/marcus-waldman/arcopt/issues</a></p>
-<p>Please include a minimal reproducible example and the output of <code><a href="https://rdrr.io/r/utils/sessionInfo.html" class="external-link">sessionInfo()</a></code>.</p>
+<p>Issues and PRs welcome at: <a href="https://github.com/marcus-waldman/arcopt/issues" class="external-link uri">https://github.com/marcus-waldman/arcopt/issues</a></p>
 </div>
 </div>
   </main><aside class="col-md-3"><div class="links">
