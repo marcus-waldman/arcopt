@@ -133,7 +133,7 @@ arcopt(x0, fn, gr, hess,
   control = list(
     # Quasi-Newton mode (no Hessian needed)
     use_qn = TRUE,
-    qn_method = "bfgs",      # or "sr1", "lbfgs", "lsr1"
+    qn_method = "hybrid",    # or "bfgs", "sr1", "lbfgs", "lsr1", "lhybrid"
 
     # Convergence tolerances
     gtol_abs = 1e-5,         # Gradient norm

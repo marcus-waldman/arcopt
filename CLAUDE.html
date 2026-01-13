@@ -69,7 +69,7 @@
 </ol><div class="section level3">
 <h3 id="key-design-philosophy">Key Design Philosophy<a class="anchor" aria-label="anchor" href="#key-design-philosophy"></a></h3>
 <ul><li>
-<strong>Hessian-Centric</strong>: Accurate second derivative information is prioritized. Hessian sources in order of preference: analytic &gt; automatic differentiation &gt; finite differences. Quasi-Newton methods deferred to future work (see design/scalable-arcs.qmd).</li>
+<strong>Hessian-Centric</strong>: Accurate second derivative information is prioritized. Hessian sources in order of preference: analytic &gt; automatic differentiation &gt; finite differences &gt; quasi-Newton approximation. QN-ARC mode available via <code>use_qn = TRUE</code>.</li>
 <li>
 <strong>Robust by Default</strong>: Single entry point <code>arcopt(x0, fn, gr, hess)</code> with sensible defaults; users should not need to manually tune regularization or select solvers</li>
 <li>
@@ -116,7 +116,7 @@
 <h3 id="deferred-features">Deferred Features<a class="anchor" aria-label="anchor" href="#deferred-features"></a></h3>
 <p>To maintain focus on core use case (statisticians, 2-500 parameters, analytic Hessians):</p>
 <p><strong>Removed in favor of eigendecomposition:</strong> - LDL-based cubic solver (see design/historical/ldl-solver.qmd)</p>
-<p><strong>Removed from current plans:</strong> - SR1 quasi-Newton updates - see design/scalable-arcs.qmd for preserved Algorithm 4 - Rationale: Cubic regularization depends on accurate curvature; finite differences preferred over quasi-Newton approximations</p>
+<p><strong>Now implemented (Algorithm 4 variants):</strong> - SR1, BFGS, L-SR1, L-BFGS quasi-Newton updates - Hybrid routing (BFGS → SR1 → Powell damping) for robustness - L-Hybrid for limited-memory with same routing logic</p>
 <p><strong>Deferred to future releases:</strong> - ARCqK multi-shift CG-Lanczos solver (Algorithm 5b) for n &gt; 500 - Matrix-free optimization via hess_vec interface</p>
 <p>See design/scalable-arcs.qmd for preserved implementations and design rationale.</p>
 </div>

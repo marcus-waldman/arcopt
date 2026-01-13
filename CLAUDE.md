@@ -32,8 +32,8 @@ The optimizer implements a hierarchical 4-layer system:
 
 - **Hessian-Centric**: Accurate second derivative information is
   prioritized. Hessian sources in order of preference: analytic \>
-  automatic differentiation \> finite differences. Quasi-Newton methods
-  deferred to future work (see design/scalable-arcs.qmd).
+  automatic differentiation \> finite differences \> quasi-Newton
+  approximation. QN-ARC mode available via `use_qn = TRUE`.
 - **Robust by Default**: Single entry point `arcopt(x0, fn, gr, hess)`
   with sensible defaults; users should not need to manually tune
   regularization or select solvers
@@ -94,10 +94,9 @@ analytic Hessians):
 **Removed in favor of eigendecomposition:** - LDL-based cubic solver
 (see design/historical/ldl-solver.qmd)
 
-**Removed from current plans:** - SR1 quasi-Newton updates - see
-design/scalable-arcs.qmd for preserved Algorithm 4 - Rationale: Cubic
-regularization depends on accurate curvature; finite differences
-preferred over quasi-Newton approximations
+**Now implemented (Algorithm 4 variants):** - SR1, BFGS, L-SR1, L-BFGS
+quasi-Newton updates - Hybrid routing (BFGS → SR1 → Powell damping) for
+robustness - L-Hybrid for limited-memory with same routing logic
 
 **Deferred to future releases:** - ARCqK multi-shift CG-Lanczos solver
 (Algorithm 5b) for n \> 500 - Matrix-free optimization via hess_vec
