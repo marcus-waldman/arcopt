@@ -1336,6 +1336,80 @@ NOTES:
    Powell damping provides a guaranteed fallback.
 ```
 
+## Algorithm 4a-lhybrid: Limited-Memory Hybrid BFGS/SR1 Update
+
+Limited-memory version of Algorithm 4a-hybrid. Same routing logic but operates on
+history vectors instead of explicit Hessian matrix.
+
+```
+ALGORITHM 4a-lhybrid: Limited-Memory Hybrid BFGS/SR1 with Powell Damping
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  H_k           History structure: {s[], y[], rho[], gamma}
+  s_k           Step vector: s_k = x_{k+1} - x_k
+  y_k           Gradient difference: y_k = g_{k+1} - g_k
+  m             Memory size (default: 10)
+  bfgs_tol      BFGS curvature tolerance (default: 1e-10)
+  sr1_skip_tol  SR1 skip threshold (default: 1e-8)
+
+OUTPUT:
+  H_{k+1}       Updated history structure
+  update_type   "lbfgs" | "lsr1" | "powell"
+  theta         Damping parameter (1.0 if no damping)
+
+PROCEDURE:
+
+  1. TRY L-BFGS (stable, maintains positive definiteness):
+     ys ← y_k^T s_k
+
+     IF ys > bfgs_tol THEN
+       H_{k+1} ← UPDATE_LBFGS(H_k, s_k, y_k, m)
+       RETURN (H_{k+1}, "lbfgs", 1.0)
+     END IF
+
+  2. FALL BACK TO L-SR1 (allows indefiniteness):
+     [Compute B_k s_k via compact form or lsr1_multiply]
+     γ ← H_k.gamma (or 1.0 if H_k is NULL)
+     b_s ← γ × s_k + Σ_i (correction terms from history)
+
+     r_k ← y_k - b_s
+     denom ← r_k^T s_k
+
+     IF |denom| ≥ sr1_skip_tol × ||r_k|| × ||s_k|| THEN
+       H_{k+1} ← UPDATE_LSR1(H_k, s_k, y_k, m, b_times_s = b_s)
+       RETURN (H_{k+1}, "lsr1", 1.0)
+     END IF
+
+  3. FALL BACK TO POWELL-DAMPED L-BFGS (guaranteed update):
+     sbs ← s_k^T b_s
+
+     [Powell damping: modify y to ensure curvature condition]
+     IF ys < 0.2 × sbs THEN
+       θ ← 0.8 × sbs / (sbs - ys)
+     ELSE
+       θ ← 1.0
+     END IF
+
+     y_damped ← θ × y_k + (1 - θ) × b_s
+     H_{k+1} ← UPDATE_LBFGS(H_k, s_k, y_damped, m)
+     RETURN (H_{k+1}, "powell", θ)
+
+─────────────────────────────────────────────────────────────────────
+NOTES:
+
+1. Computing B_k s_k in limited-memory:
+   - L-SR1: Use lsr1_multiply(H_k, s_k) directly
+   - L-BFGS: Use compact form B = γI + W^T C W, then b_s = γs + W^T(C(Ws))
+
+2. When H_k is NULL (first iteration), B_k = γI, so b_s = γ × s_k.
+
+3. The damped y is stored in L-BFGS history, ensuring all future
+   implicit Hessian-vector products use the damped curvature.
+
+4. Memory complexity: O(mn) for m stored pairs, same as standard L-BFGS.
+```
+
 ## Algorithm 4b: Accelerated Inexact Cubic QN
 
 Nesterov-style acceleration achieving $O(k^{-2})$ convergence rate.

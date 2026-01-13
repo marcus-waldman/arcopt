@@ -513,6 +513,197 @@ lbfgs_multiply <- function(history, g) {
 }
 
 
+#' L-BFGS Hessian-Vector Product (B*v)
+#'
+#' Computes B*v (Hessian approximation times vector) from L-BFGS history.
+#' Note: This is different from \code{\link{lbfgs_multiply}} which computes
+#' H*v (inverse Hessian times vector).
+#'
+#' @param history L-BFGS history list with components `s`, `y`, `rho`, `gamma`.
+#'   Can be NULL (returns gamma*v or just v if gamma not available).
+#' @param v Vector to multiply (length n).
+#' @param gamma Initial scaling. If NULL, uses history$gamma or 1.0.
+#'
+#' @return B*v where B is the L-BFGS Hessian approximation.
+#'
+#' @details
+#' Uses compact form representation: B = gamma*I + Psi * inv(M) * Psi'
+#' where Psi = Y - gamma*S and M = Psi' * S.
+#'
+#' This is needed for Powell damping in L-Hybrid, which requires s^T B s.
+#'
+#' @keywords internal
+lbfgs_multiply_b <- function(history, v, gamma = NULL) {
+  # Determine gamma
+  if (is.null(gamma)) {
+    gamma <- if (!is.null(history) && !is.null(history$gamma)) {
+      history$gamma
+    } else {
+      1.0
+    }
+  }
+
+  # Handle NULL or empty history - B = gamma*I
+  if (is.null(history) || length(history$s) == 0) {
+    return(gamma * v)
+  }
+
+  k <- length(history$s)
+  n <- length(v)
+
+  # Build S and Y matrices (n x k)
+  s_mat <- do.call(cbind, history$s)
+  y_mat <- do.call(cbind, history$y)
+
+  # Psi = Y - gamma * S (n x k)
+  psi <- y_mat - gamma * s_mat
+
+  # M = Psi^T * S (k x k) - this is lower triangular for BFGS
+  m_mat <- t(psi) %*% s_mat
+
+  # Compute Psi^T * v (k x 1)
+  psi_v <- as.vector(t(psi) %*% v)
+
+  # Solve M * alpha = Psi^T * v for alpha
+  alpha <- tryCatch(
+    solve(m_mat, psi_v),
+    error = function(e) {
+      # If M is singular, fall back to pseudoinverse
+      svd_result <- svd(m_mat)
+      tol <- .Machine$double.eps * max(dim(m_mat)) * max(svd_result$d)
+      d_inv <- ifelse(svd_result$d > tol, 1 / svd_result$d, 0)
+      as.vector(svd_result$v %*% (d_inv * (t(svd_result$u) %*% psi_v)))
+    }
+  )
+
+  # B*v = gamma*v + Psi * alpha
+  gamma * v + as.vector(psi %*% alpha)
+}
+
+
+#' Limited-Memory Hybrid BFGS/SR1 Update
+#'
+#' Limited-memory version of \code{\link{update_hybrid}}. Routes between L-BFGS,
+#' L-SR1, and Powell-damped L-BFGS based on curvature conditions.
+#'
+#' @param history L-Hybrid history list with s, y, gamma. Can be NULL.
+#' @param s Step vector: s = x_new - x_old.
+#' @param y Gradient difference: y = g_new - g_old.
+#' @param m Maximum number of pairs to store (default: 10).
+#' @param bfgs_tol BFGS curvature tolerance (default: 1e-10).
+#' @param sr1_skip_tol SR1 skip threshold (default: 1e-8).
+#' @param damping_threshold Powell damping threshold (default: 0.2).
+#'
+#' @return A list with components:
+#'   \item{history}{Updated history structure with s, y, gamma.}
+#'   \item{update_type}{"lbfgs", "lsr1", or "powell".}
+#'   \item{theta}{Damping parameter (1.0 if no damping applied).}
+#'
+#' @details
+#' Routing priority:
+#' 1. L-BFGS if y'*s > bfgs_tol (stable, positive definite)
+#' 2. L-SR1 if SR1 denominator OK (allows indefiniteness)
+#' 3. Powell-damped L-BFGS (guaranteed update)
+#'
+#' Uses a unified history format (s, y, gamma) compatible with both
+#' lbfgs_compact_form and lbfgs_multiply_b. Does not use rho since we
+#' don't need the two-loop recursion (lbfgs_multiply).
+#'
+#' This is Algorithm 4a-lhybrid from design/pseudocode.qmd.
+#'
+#' @keywords internal
+update_lhybrid <- function(history, s, y, m = 10L,
+                           bfgs_tol = 1e-10,
+                           sr1_skip_tol = 1e-8,
+                           damping_threshold = 0.2) {
+  # Compute curvature
+  ys <- sum(y * s)
+
+  # Initialize history if NULL
+  if (is.null(history)) {
+    history <- list(s = list(), y = list(), gamma = 1.0)
+  }
+
+  gamma <- history$gamma
+
+  # Compute B*s (needed for SR1 check and Powell damping if BFGS fails)
+  b_s <- lbfgs_multiply_b(history, s, gamma)
+
+  # Determine which y to store and update type
+  y_to_store <- y
+  update_type <- "lbfgs"
+  theta <- 1.0
+
+  # 1. TRY L-BFGS (stable, positive definite)
+  if (ys > bfgs_tol) {
+    # L-BFGS path: store original y
+    y_to_store <- y
+    update_type <- "lbfgs"
+    theta <- 1.0
+  } else {
+    # 2. FALL BACK TO L-SR1 (allows indefiniteness)
+    r <- y - b_s
+    r_norm <- sqrt(sum(r * r))
+    s_norm <- sqrt(sum(s * s))
+    denom <- sum(r * s)
+
+    # SR1 skip test (need r_norm > 0 to be meaningful)
+    if (r_norm >= .Machine$double.eps * s_norm &&
+        abs(denom) >= sr1_skip_tol * r_norm * s_norm) {
+      # L-SR1 path: store original y (allows negative curvature)
+      y_to_store <- y
+      update_type <- "lsr1"
+      theta <- 1.0
+    } else {
+      # 3. FALL BACK TO POWELL-DAMPED L-BFGS (guaranteed update)
+      sbs <- sum(s * b_s)
+
+      # Guard against non-positive s'Bs
+      if (sbs <= .Machine$double.eps) {
+        # Cannot apply Powell damping safely, store original y
+        y_to_store <- y
+        update_type <- "lbfgs"
+        theta <- NA_real_
+      } else {
+        # Apply Powell damping
+        if (ys < damping_threshold * sbs) {
+          theta <- (1 - damping_threshold) * sbs / (sbs - ys)
+          y_to_store <- theta * y + (1 - theta) * b_s
+        } else {
+          theta <- 1.0
+          y_to_store <- y
+        }
+        update_type <- "powell"
+      }
+    }
+  }
+
+  # Add pair to history
+  history$s <- c(history$s, list(s))
+  history$y <- c(history$y, list(y_to_store))
+
+  # Trim to m pairs if exceeding memory limit
+  k <- length(history$s)
+  if (k > m) {
+    history$s <- history$s[(k - m + 1):k]
+    history$y <- history$y[(k - m + 1):k]
+  }
+
+  # Update gamma (Barzilai-Borwein scaling from stored y)
+  ys_stored <- sum(y_to_store * s)
+  yy_stored <- sum(y_to_store * y_to_store)
+  if (yy_stored > .Machine$double.eps) {
+    history$gamma <- ys_stored / yy_stored
+  }
+
+  list(
+    history = history,
+    update_type = update_type,
+    theta = theta
+  )
+}
+
+
 #' L-SR1 History Update
 #'
 #' Updates the L-SR1 history by adding a new (s, y) pair if it passes the

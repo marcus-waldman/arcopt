@@ -58,6 +58,7 @@ In addition to standard arcopt controls:
 \item "bfgs": Standard BFGS (maintains positive definiteness)
 \item "lbfgs": Limited-memory BFGS
 \item "lsr1": Limited-memory SR1
+\item "lhybrid": Limited-memory hybrid (L-BFGS -> L-SR1 -> Powell)
 }
 \item \code{bfgs_tol}: Curvature tolerance for BFGS in hybrid mode (default: 1e-10)
 \item \code{qn_memory}: History size for limited-memory methods (default: 10)

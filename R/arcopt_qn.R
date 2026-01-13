@@ -33,6 +33,7 @@
 #'   - "bfgs": Standard BFGS (maintains positive definiteness)
 #'   - "lbfgs": Limited-memory BFGS
 #'   - "lsr1": Limited-memory SR1
+#'   - "lhybrid": Limited-memory hybrid (L-BFGS -> L-SR1 -> Powell)
 #' * `bfgs_tol`: Curvature tolerance for BFGS in hybrid mode (default: 1e-10)
 #' * `qn_memory`: History size for limited-memory methods (default: 10)
 #' * `sr1_skip_tol`: SR1 skip test tolerance (default: 1e-8)
@@ -99,13 +100,13 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL,
   control <- modifyList(control_defaults, control)
 
   # Validate QN method
-  valid_methods <- c("hybrid", "sr1", "bfgs", "lbfgs", "lsr1")
+  valid_methods <- c("hybrid", "sr1", "bfgs", "lbfgs", "lsr1", "lhybrid")
   if (!control$qn_method %in% valid_methods) {
     stop("qn_method must be one of: ", paste(valid_methods, collapse = ", "))
   }
 
   # Determine if using limited-memory method
-  use_limited_memory <- control$qn_method %in% c("lbfgs", "lsr1")
+  use_limited_memory <- control$qn_method %in% c("lbfgs", "lsr1", "lhybrid")
 
   # Validate and project initial point to bounds
   x_current <- validate_and_project_initial(x0, lower, upper)
@@ -340,7 +341,17 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL,
       y_vec <- g_current - g_previous
 
       if (use_limited_memory) {
-        if (control$qn_method == "lsr1") {
+        if (control$qn_method == "lhybrid") {
+          # L-Hybrid: L-BFGS -> L-SR1 -> Powell-damped L-BFGS
+          update_result <- update_lhybrid(
+            qn_history, s_vec, y_vec,
+            m = control$qn_memory,
+            bfgs_tol = control$bfgs_tol,
+            sr1_skip_tol = control$sr1_skip_tol
+          )
+          qn_history <- update_result$history
+          qn_updates <- qn_updates + 1
+        } else if (control$qn_method == "lsr1") {
           # L-SR1 update
           b_times_s <- if (!is.null(qn_history)) {
             lsr1_multiply(qn_history, s_vec)
