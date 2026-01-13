@@ -16,6 +16,7 @@
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/index.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/lbfgs_compact_form.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/lbfgs_multiply.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/lbfgs_multiply_b.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/lsr1_compact_form.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/lsr1_multiply.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/project_to_box.html</loc></url>
@@ -28,6 +29,7 @@
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/update_bfgs_powell.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/update_hybrid.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/update_lbfgs.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/update_lhybrid.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/update_lsr1.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/update_sigma_cgt.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/update_sigma_interpolation.html</loc></url>

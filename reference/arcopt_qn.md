@@ -81,6 +81,8 @@ In addition to standard arcopt controls:
 
   - "lsr1": Limited-memory SR1
 
+  - "lhybrid": Limited-memory hybrid (L-BFGS -\> L-SR1 -\> Powell)
+
 - `bfgs_tol`: Curvature tolerance for BFGS in hybrid mode (default:
   1e-10)
 

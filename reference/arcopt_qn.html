@@ -117,6 +117,7 @@ $$m_k(s) = f_k + g_k^T s + 1/2 s^T B_k s + sigma_k/3 ||s||^3$$</p><div class="se
 <li><p>"bfgs": Standard BFGS (maintains positive definiteness)</p></li>
 <li><p>"lbfgs": Limited-memory BFGS</p></li>
 <li><p>"lsr1": Limited-memory SR1</p></li>
+<li><p>"lhybrid": Limited-memory hybrid (L-BFGS -&gt; L-SR1 -&gt; Powell)</p></li>
 </ul></li>
 <li><p><code>bfgs_tol</code>: Curvature tolerance for BFGS in hybrid mode (default: 1e-10)</p></li>
 <li><p><code>qn_memory</code>: History size for limited-memory methods (default: 10)</p></li>
