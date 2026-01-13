@@ -1256,6 +1256,86 @@ NOTES:
    where W contains s_j and y_j vectors, enabling Algorithm 5b.
 ```
 
+## Algorithm 4a-hybrid: Hybrid BFGS/SR1 Update with Powell Damping
+
+Smart routing between BFGS and SR1 based on curvature conditions, with Powell
+damping as a guaranteed fallback.
+
+```
+ALGORITHM 4a-hybrid: Hybrid BFGS/SR1 Update with Powell Damping
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  B_k           Current Hessian approximation (n × n)
+  s_k           Step vector: s_k = x_{k+1} - x_k
+  y_k           Gradient difference: y_k = g_{k+1} - g_k
+  bfgs_tol      BFGS curvature tolerance (default: 1e-10)
+  sr1_skip_tol  SR1 skip threshold (default: 1e-8)
+  skip_count    Current consecutive SR1 skip count
+  restart_threshold  Skips before restart (default: 5)
+
+OUTPUT:
+  B_{k+1}       Updated Hessian approximation
+  update_type   "bfgs" | "sr1" | "powell" | "skipped"
+  skip_count    Updated skip counter
+
+PROCEDURE:
+
+  1. TRY BFGS (stable, maintains positive definiteness):
+     ys ← y_k^T s_k
+
+     IF ys > bfgs_tol THEN
+       B_{k+1} ← B_k - (B_k s_k s_k^T B_k)/(s_k^T B_k s_k) + (y_k y_k^T)/ys
+       RETURN (B_{k+1}, "bfgs", 0)
+     END IF
+
+  2. FALL BACK TO SR1 (allows indefiniteness):
+     r_k ← y_k - B_k s_k
+     denom ← r_k^T s_k
+
+     IF |denom| ≥ sr1_skip_tol × ||r_k|| × ||s_k|| THEN
+       B_{k+1} ← B_k + (r_k r_k^T) / denom
+       RETURN (B_{k+1}, "sr1", 0)
+     END IF
+
+  3. FALL BACK TO POWELL-DAMPED BFGS (guaranteed update):
+     bs ← B_k s_k
+     sbs ← s_k^T bs
+
+     [Powell damping: modify y to ensure curvature condition]
+     IF ys < 0.2 × sbs THEN
+       θ ← 0.8 × sbs / (sbs - ys)
+     ELSE
+       θ ← 1.0
+     END IF
+
+     y_damped ← θ × y_k + (1 - θ) × bs
+     ys_damped ← y_damped^T s_k    [guaranteed ≥ 0.2 × sbs]
+
+     B_{k+1} ← B_k - (bs bs^T)/sbs + (y_damped y_damped^T)/ys_damped
+     RETURN (B_{k+1}, "powell", 0)
+
+─────────────────────────────────────────────────────────────────────
+NOTES:
+
+1. The routing priority is: BFGS > SR1 > Powell-damped BFGS
+   - BFGS is preferred when curvature is positive (stable, well-conditioned)
+   - SR1 captures negative curvature when BFGS fails
+   - Powell damping guarantees an update when both fail
+
+2. Powell damping formula ensures s^T y_damped ≥ 0.2 × s^T B s > 0.
+   The 0.2 threshold provides sufficient curvature margin.
+
+3. The θ formula comes from Powell (1978): "A fast algorithm for
+   nonlinearly constrained optimization calculations."
+
+4. This hybrid approach is especially valuable for problems that
+   transition between convex and nonconvex regions during optimization.
+
+5. Unlike pure SR1, the hybrid method rarely skips updates since
+   Powell damping provides a guaranteed fallback.
+```
+
 ## Algorithm 4b: Accelerated Inexact Cubic QN
 
 Nesterov-style acceleration achieving $O(k^{-2})$ convergence rate.

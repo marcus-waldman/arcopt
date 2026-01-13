@@ -585,3 +585,97 @@ test_that("arcopt_qn acceleration handles single dimension", {
 
   expect_equal(result$par, 0, tolerance = 1e-3)
 })
+
+
+# =============================================================================
+# Hybrid Method Tests
+# =============================================================================
+
+test_that("hybrid is the default qn_method", {
+  # Verify default by checking result without specifying method
+  x0 <- c(2, 2)
+  result <- arcopt_qn(
+    x0, sphere_fn, sphere_gr,
+    control = list(trace = 0)
+  )
+
+  expect_true(result$converged)
+  expect_equal(result$par, c(0, 0), tolerance = 1e-4)
+})
+
+test_that("arcopt_qn converges on sphere with hybrid method", {
+  x0 <- c(5, -3, 2)
+  result <- arcopt_qn(
+    x0, sphere_fn, sphere_gr,
+    control = list(qn_method = "hybrid", trace = 0)
+  )
+
+  expect_true(result$converged)
+  expect_equal(result$par, rep(0, 3), tolerance = 1e-4)
+})
+
+test_that("arcopt_qn hybrid converges on Rosenbrock", {
+  x0 <- c(-1.2, 1)
+  result <- arcopt_qn(
+    x0, rosenbrock_fn, rosenbrock_gr,
+    control = list(qn_method = "hybrid", maxit = 1000, trace = 0)
+  )
+
+  # Rosenbrock minimum is at (1, 1)
+  expect_true(result$converged || sqrt(sum(result$gradient^2)) < 1e-3)
+  expect_equal(result$par, c(1, 1), tolerance = 0.05)
+})
+
+test_that("arcopt_qn hybrid handles ill-conditioned quadratic", {
+  x0 <- c(10, 10)
+  result <- arcopt_qn(
+    x0, quadratic_fn, quadratic_gr,
+    control = list(qn_method = "hybrid", trace = 0)
+  )
+
+  expect_true(result$converged)
+  expect_equal(result$par, c(0, 0), tolerance = 1e-4)
+})
+
+test_that("arcopt_qn hybrid respects bfgs_tol parameter", {
+  x0 <- c(5, 5)
+
+  # With very low bfgs_tol, BFGS should be used more often
+  result <- arcopt_qn(
+    x0, sphere_fn, sphere_gr,
+    control = list(qn_method = "hybrid", bfgs_tol = 1e-15, trace = 0)
+  )
+
+  expect_true(result$converged)
+})
+
+test_that("arcopt_qn hybrid respects box constraints", {
+  x0 <- c(0.5, 0.5)
+  lower <- c(0.1, 0.1)
+  upper <- c(0.9, 0.9)
+
+  result <- arcopt_qn(
+    x0, sphere_fn, sphere_gr,
+    lower = lower, upper = upper,
+    control = list(qn_method = "hybrid", trace = 0)
+  )
+
+  # Solution should respect bounds
+  expect_true(all(result$par >= lower - 1e-8))
+  expect_true(all(result$par <= upper + 1e-8))
+  # Minimum is at (0,0) but constrained, so should be at (0.1, 0.1)
+  expect_equal(result$par, c(0.1, 0.1), tolerance = 1e-4)
+})
+
+test_that("arcopt_qn hybrid tracks QN updates correctly", {
+  x0 <- c(5, 5)
+  result <- arcopt_qn(
+    x0, sphere_fn, sphere_gr,
+    control = list(qn_method = "hybrid", trace = 0)
+  )
+
+  # Should have some updates
+  expect_true(result$qn_updates > 0)
+  # Hybrid method should rarely skip since Powell is a fallback
+  expect_true(result$qn_skips <= result$qn_updates)
+})

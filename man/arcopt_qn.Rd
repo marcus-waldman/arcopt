@@ -51,10 +51,21 @@ and solves the cubic regularization subproblem:
 
 In addition to standard arcopt controls:
 \itemize{
-\item \code{qn_method}: Update method - "sr1" (default), "bfgs", "lbfgs", "lsr1"
+\item \code{qn_method}: Update method (default: "hybrid"):
+\itemize{
+\item "hybrid": Tries BFGS, falls back to SR1, then Powell-damped BFGS
+\item "sr1": Symmetric Rank-1 (allows indefinite Hessians)
+\item "bfgs": Standard BFGS (maintains positive definiteness)
+\item "lbfgs": Limited-memory BFGS
+\item "lsr1": Limited-memory SR1
+}
+\item \code{bfgs_tol}: Curvature tolerance for BFGS in hybrid mode (default: 1e-10)
 \item \code{qn_memory}: History size for limited-memory methods (default: 10)
 \item \code{sr1_skip_tol}: SR1 skip test tolerance (default: 1e-8)
 \item \code{sr1_restart_threshold}: Consecutive skips before restart (default: 5)
+\item \code{use_accel_qn}: \strong{EXPERIMENTAL} Enable Nesterov acceleration (default:
+FALSE). May improve convergence on strongly convex problems but can hurt
+performance on nonconvex problems. Use with caution.
 }
 }
 }

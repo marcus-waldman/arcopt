@@ -27,7 +27,13 @@
 #'
 #' ## Control Parameters
 #' In addition to standard arcopt controls:
-#' * `qn_method`: Update method - "sr1" (default), "bfgs", "lbfgs", "lsr1"
+#' * `qn_method`: Update method (default: "hybrid"):
+#'   - "hybrid": Tries BFGS, falls back to SR1, then Powell-damped BFGS
+#'   - "sr1": Symmetric Rank-1 (allows indefinite Hessians)
+#'   - "bfgs": Standard BFGS (maintains positive definiteness)
+#'   - "lbfgs": Limited-memory BFGS
+#'   - "lsr1": Limited-memory SR1
+#' * `bfgs_tol`: Curvature tolerance for BFGS in hybrid mode (default: 1e-10)
 #' * `qn_memory`: History size for limited-memory methods (default: 10)
 #' * `sr1_skip_tol`: SR1 skip test tolerance (default: 1e-8)
 #' * `sr1_restart_threshold`: Consecutive skips before restart (default: 5)
@@ -79,8 +85,9 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL,
     gamma1 = 0.5,
     gamma2 = 2.0,
     # QN-specific parameters
-    qn_method = "sr1",
+    qn_method = "hybrid",
     qn_memory = 10L,
+    bfgs_tol = 1e-10,
     sr1_skip_tol = 1e-8,
     sr1_restart_threshold = 5L,
     # Nesterov acceleration (Algorithm 4b) - EXPERIMENTAL, disabled by default
@@ -92,7 +99,7 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL,
   control <- modifyList(control_defaults, control)
 
   # Validate QN method
-  valid_methods <- c("sr1", "bfgs", "lbfgs", "lsr1")
+  valid_methods <- c("hybrid", "sr1", "bfgs", "lbfgs", "lsr1")
   if (!control$qn_method %in% valid_methods) {
     stop("qn_method must be one of: ", paste(valid_methods, collapse = ", "))
   }
@@ -367,7 +374,27 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL,
         }
       } else {
         # Full matrix update
-        if (control$qn_method == "sr1") {
+        if (control$qn_method == "hybrid") {
+          # Hybrid: BFGS -> SR1 -> Powell-damped BFGS
+          update_result <- update_hybrid(
+            b_current, s_vec, y_vec,
+            bfgs_tol = control$bfgs_tol,
+            sr1_skip_tol = control$sr1_skip_tol,
+            skip_count = skip_count,
+            restart_threshold = control$sr1_restart_threshold
+          )
+          b_current <- update_result$b
+          skip_count <- update_result$skip_count
+
+          if (update_result$restarted) {
+            qn_restarts <- qn_restarts + 1
+          }
+          if (update_result$skipped) {
+            qn_skips <- qn_skips + 1
+          } else {
+            qn_updates <- qn_updates + 1
+          }
+        } else if (control$qn_method == "sr1") {
           update_result <- update_sr1(
             b_current, s_vec, y_vec,
             skip_tol = control$sr1_skip_tol,

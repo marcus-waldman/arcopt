@@ -173,6 +173,220 @@ update_bfgs <- function(b, s, y) {
 }
 
 
+#' Powell-Damped BFGS Update
+#'
+#' Applies Powell damping to ensure the curvature condition is satisfied,
+#' then performs a BFGS update. This guarantees an update even when the
+#' standard curvature condition y's > 0 fails.
+#'
+#' @param b Current Hessian approximation (n x n symmetric matrix).
+#' @param s Step vector: s = x_new - x_old.
+#' @param y Gradient difference: y = g_new - g_old.
+#' @param damping_threshold Threshold for damping (default: 0.2).
+#'   Damping applied if y's < damping_threshold * s'Bs.
+#'
+#' @return A list with components:
+#'   \item{b}{Updated Hessian approximation (n x n matrix).}
+#'   \item{theta}{Damping parameter used (1.0 = no damping).}
+#'   \item{y_damped}{The damped y vector used in update.}
+#'   \item{skipped}{Logical indicating if update was skipped (only if s'Bs
+#'     is too small to apply damping).}
+#'
+#' @details
+#' Powell damping modifies y to y_damped = theta*y + (1-theta)*Bs such that
+#' s'*y_damped >= damping_threshold * s'*Bs, ensuring positive curvature.
+#'
+#' The formula for theta when y's < damping_threshold * s'Bs is:
+#' theta = (1 - damping_threshold) * s'Bs / (s'Bs - y's)
+#'
+#' This ensures s'*y_damped = damping_threshold * s'Bs exactly.
+#'
+#' @references
+#' Powell, M. J. D. (1978). A fast algorithm for nonlinearly constrained
+#' optimization calculations. Numerical Analysis, 144-157.
+#'
+#' Algorithm 4a-hybrid in design/pseudocode.qmd
+#'
+#' @keywords internal
+update_bfgs_powell <- function(b, s, y, damping_threshold = 0.2) {
+  # Compute B*s and curvature terms
+
+  bs <- as.vector(b %*% s)
+  sbs <- sum(s * bs)
+  ys <- sum(y * s)
+
+  # Guard: if s'Bs is too small, we can't apply damping safely
+
+  if (sbs <= .Machine$double.eps) {
+    return(list(b = b, theta = NA_real_, y_damped = y, skipped = TRUE))
+  }
+
+  # Determine if damping is needed
+  if (ys >= damping_threshold * sbs) {
+    # No damping needed - use standard BFGS
+    theta <- 1.0
+    y_damped <- y
+  } else {
+    # Apply Powell damping
+    # theta chosen so s'*y_damped = damping_threshold * s'Bs
+    theta <- (1 - damping_threshold) * sbs / (sbs - ys)
+    y_damped <- theta * y + (1 - theta) * bs
+  }
+
+  # Apply BFGS with (possibly damped) y
+  ys_damped <- sum(y_damped * s)
+  b_updated <- b - outer(bs, bs) / sbs + outer(y_damped, y_damped) / ys_damped
+
+  list(b = b_updated, theta = theta, y_damped = y_damped, skipped = FALSE)
+}
+
+
+#' Hybrid BFGS/SR1 Update with Automatic Routing
+#'
+#' Attempts BFGS first, falls back to SR1, then to Powell-damped BFGS.
+#' Provides robust quasi-Newton updates for both convex and nonconvex regions.
+#'
+#' @param b Current Hessian approximation (n x n symmetric matrix).
+#' @param s Step vector: s = x_new - x_old.
+#' @param y Gradient difference: y = g_new - g_old.
+#' @param bfgs_tol Tolerance for BFGS curvature condition (default: 1e-10).
+#' @param sr1_skip_tol Tolerance for SR1 skip test (default: 1e-8).
+#' @param skip_count Current count of consecutive skipped updates.
+#' @param restart_threshold Number of consecutive skips before restart
+#'   (default: 5).
+#'
+#' @return A list with components:
+#'   \item{b}{Updated Hessian approximation (n x n matrix).}
+#'   \item{update_type}{Character: "bfgs", "sr1", "powell", or "skipped".}
+#'   \item{skipped}{Logical indicating if no update was applied.}
+#'   \item{skip_count}{Updated skip counter (reset on successful update).}
+#'   \item{restarted}{Logical indicating if b was reset to scaled identity.}
+#'   \item{theta}{Powell damping parameter (only if update_type = "powell").}
+#'
+#' @details
+#' Routing priority:
+#' 1. BFGS if y's > bfgs_tol (stable, positive definite)
+#' 2. SR1 if |r's| >= sr1_skip_tol * ||r|| * ||s|| (allows indefiniteness)
+#' 3. Powell-damped BFGS otherwise (guaranteed update)
+#'
+#' The hybrid approach is ideal for problems that transition between
+#' convex and nonconvex regions.
+#'
+#' @references
+#' Algorithm 4a-hybrid in design/pseudocode.qmd
+#'
+#' @keywords internal
+update_hybrid <- function(b, s, y,
+                          bfgs_tol = 1e-10,
+                          sr1_skip_tol = 1e-8,
+                          skip_count = 0L,
+                          restart_threshold = 5L) {
+  # Early exit for zero step
+  s_norm <- sqrt(sum(s^2))
+  if (s_norm < .Machine$double.eps) {
+    return(list(
+      b = b,
+      update_type = "skipped",
+      skipped = TRUE,
+      skip_count = skip_count,
+      restarted = FALSE,
+      theta = NA_real_
+    ))
+  }
+
+  # Curvature for BFGS check
+
+  ys <- sum(y * s)
+
+  # 1. TRY BFGS (stable, maintains positive definiteness)
+  if (ys > bfgs_tol) {
+    bs <- as.vector(b %*% s)
+    sbs <- sum(s * bs)
+
+    if (sbs > .Machine$double.eps) {
+      b_updated <- b - outer(bs, bs) / sbs + outer(y, y) / ys
+      return(list(
+        b = b_updated,
+        update_type = "bfgs",
+        skipped = FALSE,
+        skip_count = 0L,
+        restarted = FALSE,
+        theta = NA_real_
+      ))
+    }
+  }
+
+  # 2. FALL BACK TO SR1 (allows indefiniteness)
+  r <- y - as.vector(b %*% s)
+  r_norm <- sqrt(sum(r^2))
+  denom <- sum(r * s)
+
+  # Skip SR1 if r is essentially zero (B already satisfies secant equation)
+  # or if denominator condition is met
+  if (r_norm >= .Machine$double.eps * s_norm &&
+      abs(denom) >= sr1_skip_tol * r_norm * s_norm) {
+    b_updated <- b + outer(r, r) / denom
+    return(list(
+      b = b_updated,
+      update_type = "sr1",
+      skipped = FALSE,
+      skip_count = 0L,
+      restarted = FALSE,
+      theta = NA_real_
+    ))
+  }
+
+  # 3. FALL BACK TO POWELL-DAMPED BFGS (guaranteed update)
+  powell_result <- update_bfgs_powell(b, s, y)
+
+  if (!powell_result$skipped) {
+    return(list(
+      b = powell_result$b,
+      update_type = "powell",
+      skipped = FALSE,
+      skip_count = 0L,
+      restarted = FALSE,
+      theta = powell_result$theta
+    ))
+  }
+
+  # All methods failed - skip update (very rare edge case)
+  skip_count <- skip_count + 1L
+
+  # Check if restart is needed
+  if (skip_count > restart_threshold) {
+    # Restart with Barzilai-Borwein scaling
+    ss <- sum(s * s)
+    if (ss > .Machine$double.eps && abs(ys) > .Machine$double.eps) {
+      gamma <- ys / ss
+    } else {
+      gamma <- 1.0
+    }
+    n <- length(s)
+    b_updated <- abs(gamma) * diag(n)  # Use abs to ensure positive scaling
+
+    return(list(
+      b = b_updated,
+      update_type = "skipped",
+      skipped = TRUE,
+      skip_count = 0L,
+      restarted = TRUE,
+      theta = NA_real_
+    ))
+  }
+
+  # Skip without restart
+  list(
+    b = b,
+    update_type = "skipped",
+    skipped = TRUE,
+    skip_count = skip_count,
+    restarted = FALSE,
+    theta = NA_real_
+  )
+}
+
+
 # =============================================================================
 # Limited-Memory Variants
 # =============================================================================
