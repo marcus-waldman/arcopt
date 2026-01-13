@@ -112,10 +112,19 @@ $$m_k(s) = f_k + g_k^T s + 1/2 s^T B_k s + sigma_k/3 ||s||^3$$</p><div class="se
 <h3 id="control-parameters">Control Parameters<a class="anchor" aria-label="anchor" href="#control-parameters"></a></h3>
 
 
-<p>In addition to standard arcopt controls:</p><ul><li><p><code>qn_method</code>: Update method - "sr1" (default), "bfgs", "lbfgs", "lsr1"</p></li>
+<p>In addition to standard arcopt controls:</p><ul><li><p><code>qn_method</code>: Update method (default: "hybrid"):</p><ul><li><p>"hybrid": Tries BFGS, falls back to SR1, then Powell-damped BFGS</p></li>
+<li><p>"sr1": Symmetric Rank-1 (allows indefinite Hessians)</p></li>
+<li><p>"bfgs": Standard BFGS (maintains positive definiteness)</p></li>
+<li><p>"lbfgs": Limited-memory BFGS</p></li>
+<li><p>"lsr1": Limited-memory SR1</p></li>
+</ul></li>
+<li><p><code>bfgs_tol</code>: Curvature tolerance for BFGS in hybrid mode (default: 1e-10)</p></li>
 <li><p><code>qn_memory</code>: History size for limited-memory methods (default: 10)</p></li>
 <li><p><code>sr1_skip_tol</code>: SR1 skip test tolerance (default: 1e-8)</p></li>
 <li><p><code>sr1_restart_threshold</code>: Consecutive skips before restart (default: 5)</p></li>
+<li><p><code>use_accel_qn</code>: <strong>EXPERIMENTAL</strong> Enable Nesterov acceleration (default:
+FALSE). May improve convergence on strongly convex problems but can hurt
+performance on nonconvex problems. Use with caution.</p></li>
 </ul></div>
 
     </div>

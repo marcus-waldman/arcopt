@@ -69,10 +69,27 @@ s + 1/2 s^T B_k s + sigma_k/3 \|\|s\|\|^3\$\$
 
 In addition to standard arcopt controls:
 
-- `qn_method`: Update method - "sr1" (default), "bfgs", "lbfgs", "lsr1"
+- `qn_method`: Update method (default: "hybrid"):
+
+  - "hybrid": Tries BFGS, falls back to SR1, then Powell-damped BFGS
+
+  - "sr1": Symmetric Rank-1 (allows indefinite Hessians)
+
+  - "bfgs": Standard BFGS (maintains positive definiteness)
+
+  - "lbfgs": Limited-memory BFGS
+
+  - "lsr1": Limited-memory SR1
+
+- `bfgs_tol`: Curvature tolerance for BFGS in hybrid mode (default:
+  1e-10)
 
 - `qn_memory`: History size for limited-memory methods (default: 10)
 
 - `sr1_skip_tol`: SR1 skip test tolerance (default: 1e-8)
 
 - `sr1_restart_threshold`: Consecutive skips before restart (default: 5)
+
+- `use_accel_qn`: **EXPERIMENTAL** Enable Nesterov acceleration
+  (default: FALSE). May improve convergence on strongly convex problems
+  but can hurt performance on nonconvex problems. Use with caution.

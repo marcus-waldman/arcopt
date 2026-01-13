@@ -25,6 +25,8 @@
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/solve_cubic_woodbury.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/try_newton_step.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/update_bfgs.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/update_bfgs_powell.html</loc></url>
+<url><loc>https://marcus-waldman.github.io/arcopt/reference/update_hybrid.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/update_lbfgs.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/update_lsr1.html</loc></url>
 <url><loc>https://marcus-waldman.github.io/arcopt/reference/update_sigma_cgt.html</loc></url>
