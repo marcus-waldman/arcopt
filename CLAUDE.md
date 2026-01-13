@@ -21,7 +21,7 @@ The optimizer implements a hierarchical 4-layer system:
 
 ### Key Design Philosophy
 
-- **Hessian-Centric**: Accurate second derivative information is prioritized. Hessian sources in order of preference: analytic > automatic differentiation > finite differences. Quasi-Newton methods deferred to future work (see design/scalable-arcs.qmd).
+- **Hessian-Centric**: Accurate second derivative information is prioritized. Hessian sources in order of preference: analytic > automatic differentiation > finite differences > quasi-Newton approximation. QN-ARC mode available via `use_qn = TRUE`.
 - **Robust by Default**: Single entry point `arcopt(x0, fn, gr, hess)` with sensible defaults; users should not need to manually tune regularization or select solvers
 - **Saddle Point Escape**: Cubic regularization naturally handles negative curvature without explicit eigenvector computation
 - **Constraint Handling**: Box constraints via step truncation; linear equality constraints via null-space transformation
@@ -66,9 +66,10 @@ To maintain focus on core use case (statisticians, 2-500 parameters, analytic He
 **Removed in favor of eigendecomposition:**
 - LDL-based cubic solver (see design/historical/ldl-solver.qmd)
 
-**Removed from current plans:**
-- SR1 quasi-Newton updates - see design/scalable-arcs.qmd for preserved Algorithm 4
-- Rationale: Cubic regularization depends on accurate curvature; finite differences preferred over quasi-Newton approximations
+**Now implemented (Algorithm 4 variants):**
+- SR1, BFGS, L-SR1, L-BFGS quasi-Newton updates
+- Hybrid routing (BFGS → SR1 → Powell damping) for robustness
+- L-Hybrid for limited-memory with same routing logic
 
 **Deferred to future releases:**
 - ARCqK multi-shift CG-Lanczos solver (Algorithm 5b) for n > 500
