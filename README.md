@@ -1,4 +1,4 @@
-# arcopt <img src="man/figures/logo.png" align="right" height="139" />
+# arcopt <img src="hexsticker/arcopt_final_gold_black.png" align="right" height="139" />
 
 <!-- badges: start -->
 [![R-CMD-check](https://github.com/marcus-waldman/arcopt/workflows/R-CMD-check/badge.svg)](https://github.com/marcus-waldman/arcopt/actions)
