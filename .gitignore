@@ -19,6 +19,10 @@ src/*.dll
 # Research documentation (not part of package)
 design/
 literature/
+manuscript/
+
+# Temporary claude files
+tmpclaude-*
 
 # pkgdown site (auto-generated)
 docs/
