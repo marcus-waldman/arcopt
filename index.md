@@ -1,4 +1,4 @@
-# arcopt ![](reference/figures/logo.png)
+# arcopt ![](hexsticker/arcopt_final_gold_black.png)
 
 > **Robust nonlinear optimization for R**
 
