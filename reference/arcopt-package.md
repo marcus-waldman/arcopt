@@ -3,8 +3,8 @@
 Implements cubic regularization methods (ARC) for local optimization
 problems common in statistics and applied research. Provides robust
 handling of ill-conditioned, nonconvex, and indefinite Hessian problems
-with automatic saddle point escape. Supports box constraints and linear
-equality constraints.
+with automatic saddle point escape. Supports box constraints; linear
+equality constraints are planned for a future release.
 
 ## See also
 

@@ -12,6 +12,7 @@ arcopt_qn(
   fn,
   gr,
   hess = NULL,
+  ...,
   lower = rep(-Inf, length(x0)),
   upper = rep(Inf, length(x0)),
   control = list()
@@ -36,6 +37,10 @@ arcopt_qn(
 
   Optional Hessian function for hybrid mode. If provided, initializes
   B_0 = H(x_0) and can refresh when approximation degrades.
+
+- ...:
+
+  Additional arguments passed to `fn`, `gr`, and `hess`.
 
 - lower:
 

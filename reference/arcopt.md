@@ -13,6 +13,7 @@ arcopt(
   fn,
   gr,
   hess = NULL,
+  ...,
   lower = rep(-Inf, length(x0)),
   upper = rep(Inf, length(x0)),
   control = list()
@@ -39,6 +40,10 @@ arcopt(
 
   Function that computes the Hessian matrix. Should take a numeric
   vector of length Q and return a Q×Q symmetric matrix. Required.
+
+- ...:
+
+  Additional arguments passed to `fn`, `gr`, and `hess`.
 
 - lower:
 
