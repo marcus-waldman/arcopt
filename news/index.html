@@ -73,6 +73,12 @@
 <ul><li><p><code><a href="../reference/arcopt.html">arcopt()</a></code> and <code><a href="../reference/arcopt_qn.html">arcopt_qn()</a></code> now accept <code>...</code> arguments that are passed through to <code>fn</code>, <code>gr</code>, and <code>hess</code>, matching the <code><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim()</a></code> convention. Tests cover both direct calls and the <code>control = list(use_qn = TRUE)</code> dispatch.</p></li>
 <li><p><code>DESCRIPTION</code>: removed the “linear equality constraints” claim; these are now listed in the future-work roadmap. Added <code>trust</code> and <code>marqLevAlg</code> to <code>Suggests:</code> to support the comparative benchmarks in the manuscript and package vignettes.</p></li>
 </ul></div>
+<div class="section level3">
+<h3 id="scope-narrowing-0-1-1">Scope narrowing<a class="anchor" aria-label="anchor" href="#scope-narrowing-0-1-1"></a></h3>
+<ul><li><p>Removed the limited-memory quasi-Newton methods (<code>"lbfgs"</code>, <code>"lsr1"</code>, <code>"lhybrid"</code>) and the Woodbury-identity cubic subproblem solver (<code>R/cubic_woodbury.R</code>). These variants were intended to scale to larger problems, but the cubic subproblem solver is still <code>O(n^3)</code> through the eigendecomposition path, so the limited-memory <code>B_k</code> did not deliver a scalability advantage in practice. The removal keeps <code><a href="../reference/arcopt_qn.html">arcopt_qn()</a></code> focused on the 2-500 parameter regime documented in the package philosophy.</p></li>
+<li><p>Valid <code>qn_method</code> values are now <code>"bfgs"</code>, <code>"sr1"</code>, and <code>"hybrid"</code>.</p></li>
+<li><p>The full limited-memory implementation, including the Woodbury solver and matching tests, is preserved on the <code>scalable-arc</code> branch for future work on matrix-free / large-scale ARC (see <code>design/scalable-arcs.qmd</code>).</p></li>
+</ul></div>
 </div>
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.1.0" id="arcopt-010">arcopt 0.1.0<a class="anchor" aria-label="anchor" href="#arcopt-010"></a></h2>

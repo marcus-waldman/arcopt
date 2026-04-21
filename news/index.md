@@ -68,6 +68,25 @@
   `marqLevAlg` to `Suggests:` to support the comparative benchmarks in
   the manuscript and package vignettes.
 
+### Scope narrowing
+
+- Removed the limited-memory quasi-Newton methods (`"lbfgs"`, `"lsr1"`,
+  `"lhybrid"`) and the Woodbury-identity cubic subproblem solver
+  (`R/cubic_woodbury.R`). These variants were intended to scale to
+  larger problems, but the cubic subproblem solver is still `O(n^3)`
+  through the eigendecomposition path, so the limited-memory `B_k` did
+  not deliver a scalability advantage in practice. The removal keeps
+  [`arcopt_qn()`](https://marcus-waldman.github.io/arcopt/reference/arcopt_qn.md)
+  focused on the 2-500 parameter regime documented in the package
+  philosophy.
+
+- Valid `qn_method` values are now `"bfgs"`, `"sr1"`, and `"hybrid"`.
+
+- The full limited-memory implementation, including the Woodbury solver
+  and matching tests, is preserved on the `scalable-arc` branch for
+  future work on matrix-free / large-scale ARC (see
+  `design/scalable-arcs.qmd`).
+
 ## arcopt 0.1.0
 
 - Initial development version

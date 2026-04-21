@@ -99,16 +99,8 @@ In addition to standard arcopt controls:
 
   - "bfgs": Standard BFGS (maintains positive definiteness)
 
-  - "lbfgs": Limited-memory BFGS
-
-  - "lsr1": Limited-memory SR1
-
-  - "lhybrid": Limited-memory hybrid (L-BFGS -\> L-SR1 -\> Powell)
-
 - `bfgs_tol`: Curvature tolerance for BFGS in hybrid mode (default:
   1e-10)
-
-- `qn_memory`: History size for limited-memory methods (default: 10)
 
 - `sr1_skip_tol`: SR1 skip test tolerance (default: 1e-8)
 
