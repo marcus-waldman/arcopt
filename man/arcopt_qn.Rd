@@ -39,6 +39,8 @@ Same structure as arcopt, plus:
 \item \code{qn_updates}: Number of successful QN updates
 \item \code{qn_skips}: Number of skipped updates
 \item \code{qn_restarts}: Number of approximation restarts
+\item \code{qn_fd_refreshes}: Number of FD Hessian refreshes performed (hybrid
+mode only; 0 for other qn_method values)
 }
 }
 \description{
@@ -50,13 +52,28 @@ Hessian function.
 The QN-ARC algorithm maintains a quasi-Newton Hessian approximation B_k
 and solves the cubic regularization subproblem:
 \deqn{m_k(s) = f_k + g_k^T s + 1/2 s^T B_k s + sigma_k/3 ||s||^3}
+\subsection{Initialization of B_0}{
+
+When \code{hess} is not supplied, \code{arcopt_qn()} seeds the initial Hessian
+approximation with a one-time finite-difference Hessian computed from
+the supplied gradient at \code{x0} (cost: \code{2 * length(x0)} gradient
+evaluations once at startup). This provides negative-curvature
+information that the pure-identity initialization used by classical
+quasi-Newton methods would miss on saddle-prone problems. To opt out
+and recover the identity-initialization convention, pass
+\code{hess = function(x) diag(length(x))} explicitly.
+}
+
 \subsection{Control Parameters}{
 
 In addition to standard arcopt controls:
 \itemize{
 \item \code{qn_method}: Update method (default: "hybrid"):
 \itemize{
-\item "hybrid": Tries BFGS, falls back to SR1, then Powell-damped BFGS
+\item "hybrid": State-aware routing between SR1-first and BFGS-first
+orderings based on the current B_k's eigenstructure and recent
+rho_k values (see below). Includes automatic FD refresh of B_k
+when SR1 is stuck. Recommended for saddle-prone problems.
 \item "sr1": Symmetric Rank-1 (allows indefinite Hessians)
 \item "bfgs": Standard BFGS (maintains positive definiteness)
 \item "lbfgs": Limited-memory BFGS
@@ -70,6 +87,29 @@ In addition to standard arcopt controls:
 \item \code{use_accel_qn}: \strong{EXPERIMENTAL} Enable Nesterov acceleration (default:
 FALSE). May improve convergence on strongly convex problems but can hurt
 performance on nonconvex problems. Use with caution.
+}
+}
+
+\subsection{Hybrid Routing Parameters}{
+
+The \code{"hybrid"} method maintains an internal mode flag that starts in
+\code{"indefinite"} (SR1-first priority) and promotes to \code{"pd"} (BFGS-first)
+once the B_k approximation has been reliably positive definite and
+cubic-model predictions have tracked the true objective:
+\itemize{
+\item \code{qn_route_demote_rho} (default 0.25): rho_k below this counts as a
+"bad" step
+\item \code{qn_route_promote_rho} (default 0.5): rho_k above this counts as a
+"good" step
+\item \code{qn_route_demote_k} (default 2): consecutive bad steps in "pd" mode
+demote back to "indefinite"
+\item \code{qn_route_promote_k} (default 3): consecutive good PD steps in
+"indefinite" mode promote to "pd"
+\item \code{qn_fd_refresh_k} (default 3): while in "indefinite" mode, this many
+consecutive bad rho steps rebuild B_k from a fresh FD Hessian
+\item \code{qn_stuck_refresh_k} (default 100): while in "indefinite" mode,
+this many iterations without promoting also triggers an FD refresh
+(safety net for secondary-saddle stalls)
 }
 }
 }

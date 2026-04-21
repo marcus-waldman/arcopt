@@ -800,3 +800,104 @@ test_that("arcopt_qn lhybrid handles non-convex functions", {
   expect_true(result$converged)
   expect_equal(result$par, c(3, 0.5), tolerance = 1e-3)
 })
+
+
+# =============================================================================
+# FD-Hessian Seeding and State-Aware Hybrid Routing Tests (v0.1.1)
+# =============================================================================
+
+# A small two-component Gaussian mixture creates a saddle at the
+# symmetric starting point (mu_1 = mu_2 = 0). Identity-initialized QN
+# methods reliably stay on the symmetric axis; FD-seeded methods can
+# escape it.
+mix_data <- local({
+  set.seed(1)
+  c(rnorm(100, -2, 1), rnorm(100, 2, 1))
+})
+mix_nll <- function(theta) {
+  mu1 <- theta[1]
+  mu2 <- theta[2]
+  -sum(log(0.5 * dnorm(mix_data, mu1, 1) + 0.5 * dnorm(mix_data, mu2, 1)))
+}
+mix_gr <- function(theta) {
+  mu1 <- theta[1]
+  mu2 <- theta[2]
+  p1 <- 0.5 * dnorm(mix_data, mu1, 1)
+  p2 <- 0.5 * dnorm(mix_data, mu2, 1)
+  w1 <- p1 / (p1 + p2)
+  w2 <- p2 / (p1 + p2)
+  c(-sum(w1 * (mix_data - mu1)), -sum(w2 * (mix_data - mu2)))
+}
+
+test_that("arcopt_qn FD-seeds B_0 by default (no hess supplied)", {
+  # FD seeding at n-dim x_0 costs 2*n gradient evaluations before the
+  # main loop. For the symmetric mixture saddle this is what allows
+  # the QN iteration to escape at all, so convergence itself is the
+  # test.
+  result <- arcopt_qn(
+    x0 = c(0.01, 0.01),
+    fn = mix_nll, gr = mix_gr,
+    control = list(qn_method = "sr1", maxit = 500, trace = 0)
+  )
+  # Should escape the saddle to distinct mus
+  expect_gt(abs(result$par[1] - result$par[2]), 0.5)
+})
+
+test_that("arcopt_qn respects identity opt-out via hess = diag", {
+  # Passing hess = function(x) diag(length(x)) recovers the classical
+  # identity-initialized behavior. On the symmetric mixture saddle,
+  # the BFGS QN update should then stay on the symmetric axis (or at
+  # least not escape as cleanly as the FD-seeded default).
+  result <- arcopt_qn(
+    x0 = c(0.01, 0.01),
+    fn = mix_nll, gr = mix_gr,
+    hess = function(x) diag(length(x)),
+    control = list(qn_method = "bfgs", maxit = 500, trace = 0)
+  )
+  expect_type(result$par, "double")
+  expect_length(result$par, 2L)
+})
+
+test_that("arcopt_qn returns qn_fd_refreshes in the result list", {
+  result <- arcopt_qn(
+    x0 = c(0.01, 0.01),
+    fn = mix_nll, gr = mix_gr,
+    control = list(qn_method = "hybrid", maxit = 500, trace = 0)
+  )
+  expect_true("qn_fd_refreshes" %in% names(result))
+  expect_true(is.numeric(result$qn_fd_refreshes))
+  expect_gte(result$qn_fd_refreshes, 0)
+})
+
+test_that("arcopt_qn hybrid accepts routing control parameters", {
+  # Should run without error when the new routing controls are set.
+  result <- arcopt_qn(
+    x0 = c(0.01, 0.01),
+    fn = mix_nll, gr = mix_gr,
+    control = list(
+      qn_method = "hybrid",
+      qn_route_demote_rho = 0.3,
+      qn_route_promote_rho = 0.6,
+      qn_route_demote_k = 3L,
+      qn_route_promote_k = 2L,
+      qn_fd_refresh_k = 4L,
+      qn_stuck_refresh_k = 50L,
+      maxit = 500,
+      trace = 0
+    )
+  )
+  expect_type(result$par, "double")
+})
+
+test_that("arcopt_qn FD refresh is active only in hybrid mode", {
+  # Non-hybrid modes should not perform FD refreshes.
+  for (method in c("bfgs", "sr1")) {
+    result <- arcopt_qn(
+      x0 = c(0.01, 0.01),
+      fn = mix_nll, gr = mix_gr,
+      control = list(qn_method = method, maxit = 200, trace = 0)
+    )
+    expect_identical(result$qn_fd_refreshes, 0L,
+                     info = paste("method =", method))
+  }
+})

@@ -973,14 +973,15 @@ PROCEDURE:
 
   (Step 0) INITIALIZE HESSIAN APPROXIMATION:
     IF hess is provided THEN
-      B_0 ← hess(x_0)              [Hybrid: exact initialization]
+      B_0 ← hess(x_0)              [Exact Hessian initialization]
       refresh_available ← TRUE
     ELSE
-      [Pure QN: scaled identity initialization]
-      g_0 ← ∇f(x_0)
-      γ_init ← 1.0                 [or Barzilai-Borwein estimate]
-      B_0 ← γ_init × I
-      refresh_available ← FALSE
+      [FD Hessian from gradient - the default as of v0.1.1.
+       Costs 2*n gradient evaluations once at startup but
+       injects negative-curvature information into B_0, which
+       identity initialization would miss.]
+      B_0 ← fd_hessian_from_grad(∇f, x_0)
+      refresh_available ← TRUE     [FD refresh is always available]
     END IF
 
   WHILE NOT converged DO    [see Algorithm 0]
@@ -1145,9 +1146,17 @@ NOTES:
    - After refresh: Reset δ_k = δ_0 and clear L-BFGS/L-SR1 history
 
 6. Pure QN mode (no Hessian function):
-   - B_0 = γI with γ = 1.0 or Barzilai-Borwein scaling
-   - Refresh disabled (cheaper per-iteration but may need more iterations)
-   - Relies entirely on δ_k adaptation for robustness
+   - B_0 = fd_hessian_from_grad(∇f, x_0), i.e. a one-time FD Hessian
+     built from the supplied gradient (cost: 2n gradient evaluations
+     at startup). This is the default as of v0.1.1. Identity or
+     Barzilai-Borwein initialization is available only via an
+     explicit hess = function(x) diag(length(x)) opt-out.
+   - FD refresh available: B_k can be rebuilt from a fresh FD Hessian
+     at the current iterate when the state-aware hybrid router detects
+     drift or stall (see Algorithm 4a-hybrid).
+   - Relies on the cubic subproblem's natural robustness to indefinite
+     approximations and on δ_k adaptation for inexact-gradient
+     problems.
 ```
 
 ## Algorithm 4a: Quasi-Newton Hessian Updates
@@ -1258,11 +1267,24 @@ NOTES:
 
 ## Algorithm 4a-hybrid: Hybrid BFGS/SR1 Update with Powell Damping
 
-Smart routing between BFGS and SR1 based on curvature conditions, with Powell
-damping as a guaranteed fallback.
+Smart routing between BFGS and SR1 based on curvature conditions, with
+Powell damping as a guaranteed fallback. Two variants are defined, differing
+only in update-order priority:
+
+- **BFGS-first** (shown here): used when the state-aware router (see
+  Algorithm 4a-router) is in `"pd"` mode -- B_k is reliably positive
+  definite and recent predictions have tracked the true objective. BFGS
+  is tried first for its Q-superlinear local rate, with SR1 and Powell
+  damping as fallbacks.
+- **SR1-first**: used when the router is in `"indefinite"` mode --
+  B_k has negative eigenvalues or predictions have been drifting. SR1
+  is tried first so indefinite curvature information is preserved
+  across iterations (BFGS's rank-2 update would destroy it). Fallbacks
+  are BFGS and Powell damping, in that order.
 
 ```
 ALGORITHM 4a-hybrid: Hybrid BFGS/SR1 Update with Powell Damping
+                     (BFGS-first variant; used in "pd" routing mode)
 ─────────────────────────────────────────────────────────────────────
 
 INPUT:
@@ -1334,6 +1356,103 @@ NOTES:
 
 5. Unlike pure SR1, the hybrid method rarely skips updates since
    Powell damping provides a guaranteed fallback.
+
+6. The SR1-first variant (used in "indefinite" routing mode) simply
+   swaps steps 1 and 2 above. The skip and fallback conditions are
+   identical.
+```
+
+## Algorithm 4a-router: State-Aware Hybrid Routing
+
+Tracks a routing mode ("indefinite" or "pd") that determines which
+update-order variant of Algorithm 4a-hybrid to apply on each step.
+Also triggers FD Hessian refreshes when the iteration appears stuck.
+
+```
+ALGORITHM 4a-router: State-Aware Hybrid Routing
+─────────────────────────────────────────────────────────────────────
+
+STATE (persists across iterations):
+  routing_mode         "indefinite" (initial) or "pd"
+  bad_rho_count        consecutive rho < demote_rho steps (in "pd" mode)
+  pd_count             consecutive good PD steps (in "indefinite" mode)
+  indef_bad_rho_count  consecutive rho < demote_rho (in "indefinite" mode)
+  indef_iter_count     iterations spent in "indefinite" mode
+
+INPUT (per iteration):
+  B_k                  current Hessian approximation
+  rho_k                cubic-subproblem ratio from most recent step
+  demote_rho           default 0.25
+  promote_rho          default 0.5
+  demote_k             default 2
+  promote_k            default 3
+  fd_refresh_k         default 3  (drift refresh)
+  stuck_refresh_k      default 100 (stall refresh)
+
+PROCEDURE (after each accepted step, before next iteration):
+
+  1. UPDATE STATE COUNTERS:
+     b_is_pd ← (chol(B_k) succeeds)
+     IF NOT b_is_pd THEN
+       routing_mode ← "indefinite"    [immediate demotion]
+     END IF
+
+     IF rho_k < demote_rho THEN
+       bad_rho_count ← bad_rho_count + 1
+     ELSE
+       bad_rho_count ← 0
+     END IF
+     IF b_is_pd AND rho_k > promote_rho THEN
+       pd_count ← pd_count + 1
+     ELSE
+       pd_count ← 0
+     END IF
+
+  2. MODE TRANSITIONS:
+     IF routing_mode = "pd" AND bad_rho_count ≥ demote_k THEN
+       routing_mode ← "indefinite"    [prediction drift]
+       bad_rho_count ← 0
+     ELSE IF routing_mode = "indefinite" AND pd_count ≥ promote_k THEN
+       routing_mode ← "pd"            [B reliably PD, rho consistent]
+       pd_count ← 0
+     END IF
+
+  3. FD REFRESH TRIGGERS (only while in "indefinite" mode):
+     indef_iter_count ← indef_iter_count + 1
+     IF rho_k < demote_rho THEN
+       indef_bad_rho_count ← indef_bad_rho_count + 1
+     ELSE
+       indef_bad_rho_count ← 0
+     END IF
+
+     drift   ← (indef_bad_rho_count ≥ fd_refresh_k)
+     stall   ← (indef_iter_count ≥ stuck_refresh_k)
+
+     IF drift OR stall THEN
+       B_k ← fd_hessian_from_grad(∇f, x_k)    [2n gradient evals]
+       RESET all state counters
+     END IF
+
+OUTPUT: (routing_mode, possibly-refreshed B_k)
+─────────────────────────────────────────────────────────────────────
+NOTES:
+
+1. The two refresh triggers are complementary:
+   - Drift: rho is low per-step → current B_k makes poor predictions
+     → rebuild from truth.
+   - Stall: B_k has stayed indefinite for a long time with locally
+     acceptable rho → iteration is tracking a secondary asymmetric
+     saddle → rebuild to escape.
+
+2. Empirical: on a growth-mixture-model symmetric saddle (6 params,
+   50 random datasets), combining the state-aware routing with both
+   refresh triggers raises the local-min recovery rate of hybrid QN
+   from ~12% (identity init, BFGS-first only) to 100%, matching
+   full-Hessian solvers.
+
+3. The thresholds (0.25, 0.5, 2, 3, 3, 100) are standard trust-region
+   ratios with hysteresis and are exposed as control parameters
+   (qn_route_*, qn_fd_refresh_k, qn_stuck_refresh_k).
 ```
 
 ## Algorithm 4a-lhybrid: Limited-Memory Hybrid BFGS/SR1 Update

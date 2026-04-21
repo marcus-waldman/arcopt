@@ -58,7 +58,12 @@ result <- arcopt(x0, fn, gr, hess)
 
 ### Mode 2: Quasi-Newton (No Hessian Required)
 
-Best when computing the Hessian is expensive or unavailable. Uses BFGS/SR1 approximations.
+Best when computing the Hessian is expensive or unavailable. Uses
+BFGS/SR1 approximations. **arcopt** seeds the initial approximation
+$B_0$ with a one-time finite-difference Hessian computed from the
+supplied gradient (cost: $2n$ gradient evaluations at startup), which
+dramatically improves saddle-escape behavior compared to the
+identity-initialization convention used in classical BFGS/SR1.
 
 ```r
 # Just provide fn and gr - no Hessian needed
@@ -85,6 +90,12 @@ Tested on 8 standard functions with 10 starting points each (80 test cases):
 | **SR1 QN** | 99% | 61 | 0 |
 
 **BFGS Quasi-Newton** achieves the same 100% convergence as exact Hessian with only 26% more iterations and zero Hessian evaluations.
+
+On problems with symmetric saddle points (e.g., growth-mixture models,
+factor models with rotational symmetry), `qn_method = "hybrid"`
+combines SR1's ability to represent indefinite curvature with BFGS's
+fast local convergence and matches full-Hessian solvers' saddle-escape
+reliability using only gradient information.
 
 ## Box Constraints
 
@@ -130,7 +141,8 @@ arcopt(x0, fn, gr, hess,
   control = list(
     # Quasi-Newton mode (no Hessian needed)
     use_qn = TRUE,
-    qn_method = "hybrid",    # or "bfgs", "sr1", "lbfgs", "lsr1", "lhybrid"
+    qn_method = "hybrid",    # recommended for saddle-prone problems;
+                             # also "bfgs", "sr1", "lbfgs", "lsr1", "lhybrid"
 
     # Convergence tolerances
     gtol_abs = 1e-5,         # Gradient norm
