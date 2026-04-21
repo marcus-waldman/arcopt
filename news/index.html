@@ -42,13 +42,47 @@
     </div>
 
     <div class="section level2">
+<h2 class="pkg-version" data-toc-text="0.1.1" id="arcopt-011-development">arcopt 0.1.1 (development)<a class="anchor" aria-label="anchor" href="#arcopt-011-development"></a></h2>
+<div class="section level3">
+<h3 id="quasi-newton-improvements-0-1-1">Quasi-Newton improvements<a class="anchor" aria-label="anchor" href="#quasi-newton-improvements-0-1-1"></a></h3>
+<ul><li><p><code><a href="../reference/arcopt_qn.html">arcopt_qn()</a></code> now seeds the initial Hessian approximation <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>B</mi><mn>0</mn></msub><annotation encoding="application/x-tex">B_0</annotation></semantics></math> with a one-time finite-difference Hessian computed from the supplied gradient when no <code>hess</code> function is provided (previously seeded with the identity matrix). Costs <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>2</mn><mi>n</mi></mrow><annotation encoding="application/x-tex">2n</annotation></semantics></math> gradient evaluations at startup but dramatically improves saddle-escape behavior. To recover the classical identity-init BFGS convention, pass <code>hess = function(x) diag(length(x))</code>.</p></li>
+<li>
+<p><code>qn_method = "hybrid"</code> now uses state-aware routing between SR1-first and BFGS-first update priorities. The mode switches based on (i) the smallest eigenvalue of the current <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>B</mi><mi>k</mi></msub><annotation encoding="application/x-tex">B_k</annotation></semantics></math> (Cholesky inertia) and</p>
+<ol start="2" style="list-style-type: lower-roman"><li>the cubic-subproblem ratio <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>ρ</mi><mi>k</mi></msub><annotation encoding="application/x-tex">\rho_k</annotation></semantics></math> over recent steps. New control parameters:</li>
+</ol><ul><li>
+<code>qn_route_demote_rho</code> (default 0.25): <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>ρ</mi><annotation encoding="application/x-tex">\rho</annotation></semantics></math> below this counts as a bad step.</li>
+<li>
+<code>qn_route_promote_rho</code> (default 0.5): <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>ρ</mi><annotation encoding="application/x-tex">\rho</annotation></semantics></math> above this counts as a good step.</li>
+<li>
+<code>qn_route_demote_k</code> (default 2): consecutive bad steps in <code>"pd"</code> mode trigger demotion to <code>"indefinite"</code>.</li>
+<li>
+<code>qn_route_promote_k</code> (default 3): consecutive good PD steps in <code>"indefinite"</code> mode trigger promotion to <code>"pd"</code>.</li>
+</ul></li>
+<li>
+<p>Two FD-Hessian refresh triggers rebuild <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>B</mi><mi>k</mi></msub><annotation encoding="application/x-tex">B_k</annotation></semantics></math> from a fresh finite-difference Hessian when the iteration is stuck in <code>"indefinite"</code> mode:</p>
+<ul><li>
+<code>qn_fd_refresh_k</code> (default 3): <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>ρ</mi><mi>k</mi></msub><annotation encoding="application/x-tex">\rho_k</annotation></semantics></math> below <code>qn_route_demote_rho</code> for this many consecutive steps signals SR1 drift.</li>
+<li>
+<code>qn_stuck_refresh_k</code> (default 100): iteration has spent this many steps in <code>"indefinite"</code> mode without promoting, indicating a secondary-saddle stall where per-step <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>ρ</mi><annotation encoding="application/x-tex">\rho</annotation></semantics></math> is acceptable but global progress has halted.</li>
+</ul></li>
+<li><p>The result list from <code><a href="../reference/arcopt_qn.html">arcopt_qn()</a></code> now includes <code>qn_fd_refreshes</code>, the number of FD Hessian refreshes performed during optimization.</p></li>
+<li><p>Empirical: on a 6-parameter growth-mixture-model symmetric saddle, <code>qn_method = "hybrid"</code> now reaches a proper local minimum on 50/50 (100%) of seeds, matching the full-Hessian solvers <code>nlminb</code>, <code>trust</code>, and arcopt with analytic Hessian. Identity-seeded BFGS in <code><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim()</a></code> reaches 29/50 (58%) on the same benchmark.</p></li>
+</ul></div>
+<div class="section level3">
+<h3 id="interface-changes-0-1-1">Interface changes<a class="anchor" aria-label="anchor" href="#interface-changes-0-1-1"></a></h3>
+<ul><li><p><code><a href="../reference/arcopt.html">arcopt()</a></code> and <code><a href="../reference/arcopt_qn.html">arcopt_qn()</a></code> now accept <code>...</code> arguments that are passed through to <code>fn</code>, <code>gr</code>, and <code>hess</code>, matching the <code><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim()</a></code> convention. Tests cover both direct calls and the <code>control = list(use_qn = TRUE)</code> dispatch.</p></li>
+<li><p><code>DESCRIPTION</code>: removed the “linear equality constraints” claim; these are now listed in the future-work roadmap. Added <code>trust</code> and <code>marqLevAlg</code> to <code>Suggests:</code> to support the comparative benchmarks in the manuscript and package vignettes.</p></li>
+</ul></div>
+</div>
+    <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.1.0" id="arcopt-010">arcopt 0.1.0<a class="anchor" aria-label="anchor" href="#arcopt-010"></a></h2>
 <ul><li>Initial development version</li>
 <li>CRAN-compliant package structure with Rcpp integration</li>
 <li>Tidyverse style enforcement via lintr</li>
 <li>GitHub Actions CI/CD for automated testing and checks</li>
 </ul></div>
-  </main></div>
+  </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
+    </nav></aside></div>
 
 
     <footer><div class="pkgdown-footer-left">

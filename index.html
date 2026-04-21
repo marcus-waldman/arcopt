@@ -114,7 +114,7 @@
 <div class="section level3">
 <h3 id="mode-2-quasi-newton-no-hessian-required">Mode 2: Quasi-Newton (No Hessian Required)<a class="anchor" aria-label="anchor" href="#mode-2-quasi-newton-no-hessian-required"></a>
 </h3>
-<p>Best when computing the Hessian is expensive or unavailable. Uses BFGS/SR1 approximations.</p>
+<p>Best when computing the Hessian is expensive or unavailable. Uses BFGS/SR1 approximations. <strong>arcopt</strong> seeds the initial approximation <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>B</mi><mn>0</mn></msub><annotation encoding="application/x-tex">B_0</annotation></semantics></math> with a one-time finite-difference Hessian computed from the supplied gradient (cost: <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>2</mn><mi>n</mi></mrow><annotation encoding="application/x-tex">2n</annotation></semantics></math> gradient evaluations at startup), which dramatically improves saddle-escape behavior compared to the identity-initialization convention used in classical BFGS/SR1.</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="co"># Just provide fn and gr - no Hessian needed</span></span>
 <span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>use_qn <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
@@ -183,6 +183,7 @@
 </tbody>
 </table>
 <p><strong>BFGS Quasi-Newton</strong> achieves the same 100% convergence as exact Hessian with only 26% more iterations and zero Hessian evaluations.</p>
+<p>On problems with symmetric saddle points (e.g., growth-mixture models, factor models with rotational symmetry), <code>qn_method = "hybrid"</code> combines SR1’s ability to represent indefinite curvature with BFGS’s fast local convergence and matches full-Hessian solvers’ saddle-escape reliability using only gradient information.</p>
 </div>
 <div class="section level2">
 <h2 id="box-constraints">Box Constraints<a class="anchor" aria-label="anchor" href="#box-constraints"></a>
@@ -225,7 +226,8 @@
 <span>  control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span></span>
 <span>    <span class="co"># Quasi-Newton mode (no Hessian needed)</span></span>
 <span>    use_qn <span class="op">=</span> <span class="cn">TRUE</span>,</span>
-<span>    qn_method <span class="op">=</span> <span class="st">"hybrid"</span>,    <span class="co"># or "bfgs", "sr1", "lbfgs", "lsr1", "lhybrid"</span></span>
+<span>    qn_method <span class="op">=</span> <span class="st">"hybrid"</span>,    <span class="co"># recommended for saddle-prone problems;</span></span>
+<span>                             <span class="co"># also "bfgs", "sr1", "lbfgs", "lsr1", "lhybrid"</span></span>
 <span></span>
 <span>    <span class="co"># Convergence tolerances</span></span>
 <span>    gtol_abs <span class="op">=</span> <span class="fl">1e-5</span>,         <span class="co"># Gradient norm</span></span>

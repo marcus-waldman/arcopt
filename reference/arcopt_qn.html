@@ -108,16 +108,35 @@ initializes B_0 = H(x_0) and can refresh when approximation degrades.</p></dd>
     <p>Same structure as arcopt, plus:</p><ul><li><p><code>qn_updates</code>: Number of successful QN updates</p></li>
 <li><p><code>qn_skips</code>: Number of skipped updates</p></li>
 <li><p><code>qn_restarts</code>: Number of approximation restarts</p></li>
+<li><p><code>qn_fd_refreshes</code>: Number of FD Hessian refreshes performed (hybrid
+mode only; 0 for other qn_method values)</p></li>
 </ul></div>
     <div class="section level2">
     <h2 id="details">Details<a class="anchor" aria-label="anchor" href="#details"></a></h2>
     <p>The QN-ARC algorithm maintains a quasi-Newton Hessian approximation B_k
 and solves the cubic regularization subproblem:
 $$m_k(s) = f_k + g_k^T s + 1/2 s^T B_k s + sigma_k/3 ||s||^3$$</p><div class="section">
+<h3 id="initialization-of-b-">Initialization of B_0<a class="anchor" aria-label="anchor" href="#initialization-of-b-"></a></h3>
+
+
+<p>When <code>hess</code> is not supplied, <code>arcopt_qn()</code> seeds the initial Hessian
+approximation with a one-time finite-difference Hessian computed from
+the supplied gradient at <code>x0</code> (cost: <code>2 * length(x0)</code> gradient
+evaluations once at startup). This provides negative-curvature
+information that the pure-identity initialization used by classical
+quasi-Newton methods would miss on saddle-prone problems. To opt out
+and recover the identity-initialization convention, pass
+<code>hess = function(x) diag(length(x))</code> explicitly.</p>
+</div>
+
+<div class="section">
 <h3 id="control-parameters">Control Parameters<a class="anchor" aria-label="anchor" href="#control-parameters"></a></h3>
 
 
-<p>In addition to standard arcopt controls:</p><ul><li><p><code>qn_method</code>: Update method (default: "hybrid"):</p><ul><li><p>"hybrid": Tries BFGS, falls back to SR1, then Powell-damped BFGS</p></li>
+<p>In addition to standard arcopt controls:</p><ul><li><p><code>qn_method</code>: Update method (default: "hybrid"):</p><ul><li><p>"hybrid": State-aware routing between SR1-first and BFGS-first
+orderings based on the current B_k's eigenstructure and recent
+rho_k values (see below). Includes automatic FD refresh of B_k
+when SR1 is stuck. Recommended for saddle-prone problems.</p></li>
 <li><p>"sr1": Symmetric Rank-1 (allows indefinite Hessians)</p></li>
 <li><p>"bfgs": Standard BFGS (maintains positive definiteness)</p></li>
 <li><p>"lbfgs": Limited-memory BFGS</p></li>
@@ -131,6 +150,28 @@ $$m_k(s) = f_k + g_k^T s + 1/2 s^T B_k s + sigma_k/3 ||s||^3$$</p><div class="se
 <li><p><code>use_accel_qn</code>: <strong>EXPERIMENTAL</strong> Enable Nesterov acceleration (default:
 FALSE). May improve convergence on strongly convex problems but can hurt
 performance on nonconvex problems. Use with caution.</p></li>
+</ul></div>
+
+<div class="section">
+<h3 id="hybrid-routing-parameters">Hybrid Routing Parameters<a class="anchor" aria-label="anchor" href="#hybrid-routing-parameters"></a></h3>
+
+
+<p>The <code>"hybrid"</code> method maintains an internal mode flag that starts in
+<code>"indefinite"</code> (SR1-first priority) and promotes to <code>"pd"</code> (BFGS-first)
+once the B_k approximation has been reliably positive definite and
+cubic-model predictions have tracked the true objective:</p><ul><li><p><code>qn_route_demote_rho</code> (default 0.25): rho_k below this counts as a
+"bad" step</p></li>
+<li><p><code>qn_route_promote_rho</code> (default 0.5): rho_k above this counts as a
+"good" step</p></li>
+<li><p><code>qn_route_demote_k</code> (default 2): consecutive bad steps in "pd" mode
+demote back to "indefinite"</p></li>
+<li><p><code>qn_route_promote_k</code> (default 3): consecutive good PD steps in
+"indefinite" mode promote to "pd"</p></li>
+<li><p><code>qn_fd_refresh_k</code> (default 3): while in "indefinite" mode, this many
+consecutive bad rho steps rebuild B_k from a fresh FD Hessian</p></li>
+<li><p><code>qn_stuck_refresh_k</code> (default 100): while in "indefinite" mode,
+this many iterations without promoting also triggers an FD refresh
+(safety net for secondary-saddle stalls)</p></li>
 </ul></div>
 
     </div>
