@@ -92,6 +92,13 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
     bfgs_tol = 1e-10,
     sr1_skip_tol = 1e-8,
     sr1_restart_threshold = 5L,
+    # State-aware hybrid routing: switches SR1-first when B is indefinite
+    # or when BFGS predictions drift; switches BFGS-first when B has been
+    # positive definite and predictions have tracked well.
+    qn_route_demote_rho = 0.25,   # rho below this counts as a bad step
+    qn_route_promote_rho = 0.5,   # rho above this counts as a good step
+    qn_route_demote_k = 2L,       # consecutive bad steps -> indefinite mode
+    qn_route_promote_k = 3L,      # consecutive good PD steps -> pd mode
     # Nesterov acceleration (Algorithm 4b) - EXPERIMENTAL, disabled by default
     # Can hurt convergence on nonconvex problems; needs adaptive restart logic
     use_accel_qn = FALSE,
@@ -122,6 +129,14 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
   qn_skips <- 0
   qn_restarts <- 0
   skip_count <- 0L
+
+  # State-aware hybrid routing. Initialized to "indefinite" because B_0
+  # is the FD Hessian (or user-supplied hess), which can have negative
+  # eigenvalues on saddle-prone problems; SR1-first is the safer default
+  # until we confirm B is reliably positive definite and accurate.
+  routing_mode <- "indefinite"
+  bad_rho_count <- 0L
+  pd_count <- 0L
 
   # Initial evaluation
   f_current <- fn(x_current, ...)
@@ -408,8 +423,15 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
       } else {
         # Full matrix update
         if (control$qn_method == "hybrid") {
-          # Hybrid: BFGS -> SR1 -> Powell-damped BFGS
-          update_result <- update_hybrid(
+          # State-aware routing: choose update priority based on whether
+          # B_k is currently indefinite or whether BFGS predictions have
+          # been drifting. See qn_route_* control parameters.
+          hybrid_fn <- if (routing_mode == "indefinite") {
+            update_hybrid_sr1_first
+          } else {
+            update_hybrid
+          }
+          update_result <- hybrid_fn(
             b_current, s_vec, y_vec,
             bfgs_tol = control$bfgs_tol,
             sr1_skip_tol = control$sr1_skip_tol,
@@ -418,6 +440,45 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
           )
           b_current <- update_result$b
           skip_count <- update_result$skip_count
+
+          # Update routing state based on lambda_min(B) and recent rho.
+          # lambda_min is cheap to obtain via Cholesky inertia: if chol()
+          # succeeds, B is positive definite; otherwise at least one
+          # eigenvalue is non-positive.
+          b_is_pd <- !inherits(
+            try(chol(b_current), silent = TRUE), "try-error"
+          )
+
+          # rho tracking: count consecutive "bad" predictions
+          if (is.finite(rho) && rho < control$qn_route_demote_rho) {
+            bad_rho_count <- bad_rho_count + 1L
+          } else {
+            bad_rho_count <- 0L
+          }
+
+          # Promote pd_count only when B is PD AND current step's rho
+          # looks healthy
+          if (b_is_pd && is.finite(rho) && rho > control$qn_route_promote_rho) {
+            pd_count <- pd_count + 1L
+          } else {
+            pd_count <- 0L
+          }
+
+          # Mode transitions
+          if (!b_is_pd) {
+            # Always enter indefinite mode when B has non-PD directions
+            routing_mode <- "indefinite"
+          } else if (routing_mode == "pd" &&
+                     bad_rho_count >= control$qn_route_demote_k) {
+            # Drift in BFGS predictions: fall back to SR1-first
+            routing_mode <- "indefinite"
+            bad_rho_count <- 0L
+          } else if (routing_mode == "indefinite" &&
+                     pd_count >= control$qn_route_promote_k) {
+            # B has been reliably PD and predictions good: promote
+            routing_mode <- "pd"
+            pd_count <- 0L
+          }
 
           if (update_result$restarted) {
             qn_restarts <- qn_restarts + 1

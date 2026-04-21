@@ -387,6 +387,88 @@ update_hybrid <- function(b, s, y,
 }
 
 
+#' Hybrid Update with SR1-First Routing
+#'
+#' Reverse priority of update_hybrid: tries SR1 first (to preserve
+#' indefinite curvature information), then BFGS, then Powell-damped
+#' BFGS. Used by arcopt_qn when the current Hessian approximation is
+#' indefinite or when recent BFGS predictions have been inaccurate.
+#'
+#' @inheritParams update_hybrid
+#' @return Same structure as update_hybrid.
+#' @keywords internal
+update_hybrid_sr1_first <- function(b, s, y,
+                                    bfgs_tol = 1e-10,
+                                    sr1_skip_tol = 1e-8,
+                                    skip_count = 0L,
+                                    restart_threshold = 5L) {
+  s_norm <- sqrt(sum(s^2))
+  if (s_norm < .Machine$double.eps) {
+    return(list(
+      b = b, update_type = "skipped", skipped = TRUE,
+      skip_count = skip_count, restarted = FALSE, theta = NA_real_
+    ))
+  }
+
+  # 1. TRY SR1 FIRST (preserves indefinite curvature)
+  r <- y - as.vector(b %*% s)
+  r_norm <- sqrt(sum(r^2))
+  denom <- sum(r * s)
+  if (r_norm >= .Machine$double.eps * s_norm &&
+      abs(denom) >= sr1_skip_tol * r_norm * s_norm) {
+    b_updated <- b + outer(r, r) / denom
+    return(list(
+      b = b_updated, update_type = "sr1", skipped = FALSE,
+      skip_count = 0L, restarted = FALSE, theta = NA_real_
+    ))
+  }
+
+  # 2. FALL BACK TO BFGS (when SR1 denominator is degenerate)
+  ys <- sum(y * s)
+  if (ys > bfgs_tol) {
+    bs <- as.vector(b %*% s)
+    sbs <- sum(s * bs)
+    if (sbs > .Machine$double.eps) {
+      b_updated <- b - outer(bs, bs) / sbs + outer(y, y) / ys
+      return(list(
+        b = b_updated, update_type = "bfgs", skipped = FALSE,
+        skip_count = 0L, restarted = FALSE, theta = NA_real_
+      ))
+    }
+  }
+
+  # 3. FALL BACK TO POWELL-DAMPED BFGS
+  powell_result <- update_bfgs_powell(b, s, y)
+  if (!powell_result$skipped) {
+    return(list(
+      b = powell_result$b, update_type = "powell", skipped = FALSE,
+      skip_count = 0L, restarted = FALSE, theta = powell_result$theta
+    ))
+  }
+
+  # All methods failed -- apply the same restart logic as update_hybrid
+  skip_count <- skip_count + 1L
+  if (skip_count > restart_threshold) {
+    ss <- sum(s * s)
+    gamma <- if (ss > .Machine$double.eps && abs(ys) > .Machine$double.eps) {
+      ys / ss
+    } else {
+      1.0
+    }
+    n <- length(s)
+    b_updated <- abs(gamma) * diag(n)
+    return(list(
+      b = b_updated, update_type = "skipped", skipped = TRUE,
+      skip_count = 0L, restarted = TRUE, theta = NA_real_
+    ))
+  }
+  list(
+    b = b, update_type = "skipped", skipped = TRUE,
+    skip_count = skip_count, restarted = FALSE, theta = NA_real_
+  )
+}
+
+
 # =============================================================================
 # Limited-Memory Variants
 # =============================================================================
