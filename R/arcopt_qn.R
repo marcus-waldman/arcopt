@@ -99,6 +99,18 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
     qn_route_promote_rho = 0.5,   # rho above this counts as a good step
     qn_route_demote_k = 2L,       # consecutive bad steps -> indefinite mode
     qn_route_promote_k = 3L,      # consecutive good PD steps -> pd mode
+    # FD refresh: if bad rho persists while already in indefinite mode,
+    # recompute B from an FD Hessian at the current iterate (2*n gradient
+    # evals). Handles cases where the SR1 approximation has drifted too
+    # far from the true Hessian to recover via secant updates alone.
+    qn_fd_refresh_k = 3L,         # consecutive bad rho (in indefinite mode) -> refresh
+    # Safety-net refresh: if the iteration stays in indefinite mode for
+    # this many iterations without promoting to pd, force a refresh.
+    # Catches "stuck at secondary saddle" cases where rho is OK per-step
+    # but the iterate is not making global progress to a local minimum.
+    # Deliberately large so that SR1 has time to accumulate secant
+    # information before we discard it.
+    qn_stuck_refresh_k = 100L,    # iterations stuck in indefinite mode -> refresh
     # Nesterov acceleration (Algorithm 4b) - EXPERIMENTAL, disabled by default
     # Can hurt convergence on nonconvex problems; needs adaptive restart logic
     use_accel_qn = FALSE,
@@ -137,6 +149,15 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
   routing_mode <- "indefinite"
   bad_rho_count <- 0L
   pd_count <- 0L
+  # Counter for FD refresh trigger: tracks consecutive bad rho while
+  # we are already in indefinite mode. Separate from bad_rho_count so
+  # that a pd -> indefinite demotion does not immediately arm the
+  # refresh.
+  indef_bad_rho_count <- 0L
+  # Counter for safety-net refresh: tracks iterations spent in
+  # indefinite mode. Reset on promotion to pd or on any refresh.
+  indef_iter_count <- 0L
+  qn_fd_refreshes <- 0L
 
   # Initial evaluation
   f_current <- fn(x_current, ...)
@@ -480,6 +501,40 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
             pd_count <- 0L
           }
 
+          # FD refresh: two complementary triggers while routing is in
+          # indefinite mode.
+          #   (a) Drift: rho < demote_rho for K consecutive steps means
+          #       the current B's predictions don't match the objective.
+          #   (b) Stall: indefinite mode persists for qn_stuck_refresh_k
+          #       iterations without promoting to pd, which indicates
+          #       the iteration is tracking a persistent saddle (local
+          #       rho may be acceptable but global progress has stalled).
+          # Either trigger rebuilds B from a fresh FD Hessian at the
+          # current iterate (2*n gradient evals).
+          if (routing_mode == "indefinite") {
+            indef_iter_count <- indef_iter_count + 1L
+            if (is.finite(rho) && rho < control$qn_route_demote_rho) {
+              indef_bad_rho_count <- indef_bad_rho_count + 1L
+            } else {
+              indef_bad_rho_count <- 0L
+            }
+            trigger_drift <- indef_bad_rho_count >= control$qn_fd_refresh_k
+            trigger_stall <- indef_iter_count >= control$qn_stuck_refresh_k
+            if (trigger_drift || trigger_stall) {
+              b_current <- fd_hess_from_grad(x_current)
+              gr_evals <- gr_evals + 2 * n
+              qn_fd_refreshes <- qn_fd_refreshes + 1L
+              indef_bad_rho_count <- 0L
+              indef_iter_count <- 0L
+              bad_rho_count <- 0L
+              pd_count <- 0L
+              skip_count <- 0L
+            }
+          } else {
+            indef_bad_rho_count <- 0L
+            indef_iter_count <- 0L
+          }
+
           if (update_result$restarted) {
             qn_restarts <- qn_restarts + 1
           }
@@ -575,6 +630,7 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
     message = conv_reason,
     qn_updates = qn_updates,
     qn_skips = qn_skips,
-    qn_restarts = qn_restarts
+    qn_restarts = qn_restarts,
+    qn_fd_refreshes = qn_fd_refreshes
   )
 }
