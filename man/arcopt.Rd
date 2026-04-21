@@ -9,6 +9,7 @@ arcopt(
   fn,
   gr,
   hess = NULL,
+  ...,
   lower = rep(-Inf, length(x0)),
   upper = rep(Inf, length(x0)),
   control = list()
@@ -25,6 +26,8 @@ of length Q and return a numeric vector of length Q. Required.}
 
 \item{hess}{Function that computes the Hessian matrix. Should take a numeric
 vector of length Q and return a Q×Q symmetric matrix. Required.}
+
+\item{...}{Additional arguments passed to \code{fn}, \code{gr}, and \code{hess}.}
 
 \item{lower}{Numeric vector of lower bounds (length Q). Use \code{-Inf} for
 unbounded parameters. Default: all \code{-Inf}.}

@@ -8,8 +8,8 @@ Authors@R: c(
 Description: Implements cubic regularization methods (ARC) for local
     optimization problems common in statistics and applied research. Provides
     robust handling of ill-conditioned, nonconvex, and indefinite Hessian
-    problems with automatic saddle point escape. Supports box constraints and
-    linear equality constraints.
+    problems with automatic saddle point escape. Supports box constraints;
+    linear equality constraints are planned for a future release.
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
@@ -26,7 +26,9 @@ Suggests:
     testthat (>= 3.0.0),
     knitr,
     rmarkdown,
-    covr
+    covr,
+    marqLevAlg,
+    trust
 VignetteBuilder: knitr
 RoxygenNote: 7.3.3
 Roxygen: list(markdown = TRUE)

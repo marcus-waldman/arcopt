@@ -9,6 +9,7 @@ arcopt_qn(
   fn,
   gr,
   hess = NULL,
+  ...,
   lower = rep(-Inf, length(x0)),
   upper = rep(Inf, length(x0)),
   control = list()
@@ -23,6 +24,8 @@ arcopt_qn(
 
 \item{hess}{Optional Hessian function for hybrid mode. If provided,
 initializes B_0 = H(x_0) and can refresh when approximation degrades.}
+
+\item{...}{Additional arguments passed to \code{fn}, \code{gr}, and \code{hess}.}
 
 \item{lower}{Numeric vector of lower bounds (length n). Default: all -Inf.}
 

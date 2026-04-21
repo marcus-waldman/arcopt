@@ -11,6 +11,7 @@
 #'   of length Q and return a numeric vector of length Q. Required.
 #' @param hess Function that computes the Hessian matrix. Should take a numeric
 #'   vector of length Q and return a Q×Q symmetric matrix. Required.
+#' @param ... Additional arguments passed to `fn`, `gr`, and `hess`.
 #' @param lower Numeric vector of lower bounds (length Q). Use `-Inf` for
 #'   unbounded parameters. Default: all `-Inf`.
 #' @param upper Numeric vector of upper bounds (length Q). Use `Inf` for
@@ -98,7 +99,7 @@
 #' print(result$par)      # Should be near c(1, 1)
 #' print(result$value)    # Should be near 0
 #' }
-arcopt <- function(x0, fn, gr, hess = NULL,
+arcopt <- function(x0, fn, gr, hess = NULL, ...,
                    lower = rep(-Inf, length(x0)),
                    upper = rep(Inf, length(x0)),
                    control = list()) {
@@ -128,7 +129,8 @@ arcopt <- function(x0, fn, gr, hess = NULL,
   # Route to QN optimizer if requested
   use_qn <- if (!is.null(control$use_qn)) control$use_qn else FALSE
   if (use_qn) {
-    return(arcopt_qn(x0, fn, gr, hess, lower, upper, control))
+    return(arcopt_qn(x0, fn, gr, hess, ...,
+                     lower = lower, upper = upper, control = control))
   }
 
   # Default control parameters
@@ -176,8 +178,8 @@ arcopt <- function(x0, fn, gr, hess = NULL,
   v_prev <- rep(0, length(x0))
 
   # Initial evaluation
-  f_current <- fn(x_current)
-  g_current <- gr(x_current)
+  f_current <- fn(x_current, ...)
+  g_current <- gr(x_current, ...)
   fn_evals <- fn_evals + 1
   gr_evals <- gr_evals + 1
 
@@ -192,7 +194,7 @@ arcopt <- function(x0, fn, gr, hess = NULL,
   }
 
   # Initialize Hessian
-  h_current <- hess(x_current)
+  h_current <- hess(x_current, ...)
   hess_evals <- hess_evals + 1
 
   # Initialize history with initial values
@@ -314,7 +316,7 @@ arcopt <- function(x0, fn, gr, hess = NULL,
         x_trial <- box_result$x_new
 
         # Evaluate trial point
-        f_trial <- fn(x_trial)
+        f_trial <- fn(x_trial, ...)
         fn_evals <- fn_evals + 1
 
         # Check for NaN/Inf in Newton trial evaluation
@@ -336,7 +338,7 @@ arcopt <- function(x0, fn, gr, hess = NULL,
             # Trial point before momentum
             y_new <- x_trial
             f_new <- f_trial
-            g_new <- gr(y_new)
+            g_new <- gr(y_new, ...)
             gr_evals <- gr_evals + 1
 
             # Check for NaN/Inf in new gradient
@@ -355,7 +357,7 @@ arcopt <- function(x0, fn, gr, hess = NULL,
             # quadratic model, so accumulated cubic momentum direction is stale
             v_prev <- rep(0, length(x_current))
 
-            h_current <- hess(x_current)
+            h_current <- hess(x_current, ...)
             hess_evals <- hess_evals + 1
 
             # Track step norm and function value
@@ -405,7 +407,7 @@ arcopt <- function(x0, fn, gr, hess = NULL,
       x_trial <- box_result$x_new
 
       # Evaluate trial point
-      f_trial <- fn(x_trial)
+      f_trial <- fn(x_trial, ...)
       fn_evals <- fn_evals + 1
 
       # Check for NaN/Inf in trial evaluation
@@ -430,7 +432,7 @@ arcopt <- function(x0, fn, gr, hess = NULL,
         # Trial point before momentum
         y_new <- x_trial
         f_new <- f_trial
-        g_new <- gr(y_new)
+        g_new <- gr(y_new, ...)
         gr_evals <- gr_evals + 1
 
         # Check for NaN/Inf in new gradient
@@ -462,7 +464,7 @@ arcopt <- function(x0, fn, gr, hess = NULL,
           # Simplified: x_{k+1} = y_{k+1} + beta * v_{k-1} (since y_{k+1} = x_k + s_k)
           v_trial <- beta_upper * v_prev + s_current
           z_trial <- y_new + beta_upper * v_prev
-          f_trial <- fn(z_trial)
+          f_trial <- fn(z_trial, ...)
           fn_evals <- fn_evals + 1
 
           if (check_finite(f_trial, rep(0, length(z_trial))) && f_trial <= f_target) {
@@ -480,7 +482,7 @@ arcopt <- function(x0, fn, gr, hess = NULL,
               beta_mid <- (beta_low + beta_high) / 2
               v_trial <- beta_mid * v_prev + s_current
               z_trial <- y_new + beta_mid * v_prev
-              f_trial <- fn(z_trial)
+              f_trial <- fn(z_trial, ...)
               fn_evals <- fn_evals + 1
 
               if (check_finite(f_trial, rep(0, length(z_trial))) && f_trial <= f_target) {
@@ -502,7 +504,7 @@ arcopt <- function(x0, fn, gr, hess = NULL,
           v_prev <- v_current
 
           # Evaluate gradient at accepted point
-          g_current <- gr(x_current)
+          g_current <- gr(x_current, ...)
           gr_evals <- gr_evals + 1
         } else {
           # No momentum: x_{k+1} = y_{k+1}
@@ -511,7 +513,7 @@ arcopt <- function(x0, fn, gr, hess = NULL,
           g_current <- g_new
         }
 
-        h_current <- hess(x_current)
+        h_current <- hess(x_current, ...)
         hess_evals <- hess_evals + 1
 
         # Track step norm and function value for stagnation detection

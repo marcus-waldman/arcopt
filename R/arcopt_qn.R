@@ -16,6 +16,7 @@
 #' @param gr Function that computes the gradient.
 #' @param hess Optional Hessian function for hybrid mode. If provided,
 #'   initializes B_0 = H(x_0) and can refresh when approximation degrades.
+#' @param ... Additional arguments passed to `fn`, `gr`, and `hess`.
 #' @param lower Numeric vector of lower bounds (length n). Default: all -Inf.
 #' @param upper Numeric vector of upper bounds (length n). Default: all Inf.
 #' @param control List of control parameters (see Details).
@@ -48,7 +49,7 @@
 #' * `qn_restarts`: Number of approximation restarts
 #'
 #' @keywords internal
-arcopt_qn <- function(x0, fn, gr, hess = NULL,
+arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
                       lower = rep(-Inf, length(x0)),
                       upper = rep(Inf, length(x0)),
                       control = list()) {
@@ -123,13 +124,30 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL,
   skip_count <- 0L
 
   # Initial evaluation
-  f_current <- fn(x_current)
-  g_current <- gr(x_current)
+  f_current <- fn(x_current, ...)
+  g_current <- gr(x_current, ...)
   fn_evals <- fn_evals + 1
   gr_evals <- gr_evals + 1
 
   if (!check_finite(f_current, g_current)) {
     stop("Initial point yields NaN or Inf in function or gradient")
+  }
+
+  # Finite-difference Hessian from the gradient -- used to seed B_0 when
+  # an exact Hessian is not supplied. Costs 2*n gradient evaluations once
+  # at startup. Seeding from a real Hessian (rather than the identity) is
+  # essential on saddle-prone problems: it injects negative-curvature
+  # information into B_0 immediately, so the cubic subproblem can step
+  # off the symmetric axis in iteration 1.
+  fd_hess_from_grad <- function(theta, h = 1e-5) {
+    d <- length(theta)
+    fd_mat <- matrix(0, d, d)
+    for (i in seq_len(d)) {
+      ei <- rep(0, d)
+      ei[i] <- h
+      fd_mat[, i] <- (gr(theta + ei, ...) - gr(theta - ei, ...)) / (2 * h)
+    }
+    0.5 * (fd_mat + t(fd_mat))
   }
 
   # Initialize Hessian approximation
@@ -138,23 +156,27 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL,
     qn_history <- NULL
     gamma <- 1.0  # Initial scaling
 
-    # If Hessian provided, use it to set initial gamma
     if (!is.null(hess)) {
-      h_init <- hess(x_current)
+      h_init <- hess(x_current, ...)
       hess_evals <- hess_evals + 1
-      # Use average diagonal as gamma
-      gamma <- mean(diag(h_init))
-      if (gamma <= 0) gamma <- 1.0
+    } else {
+      # Default: FD Hessian from the gradient (one-time at x_0)
+      h_init <- fd_hess_from_grad(x_current)
+      gr_evals <- gr_evals + 2 * n
     }
+    # Use average diagonal as gamma (positive entries only)
+    gamma <- mean(diag(h_init))
+    if (gamma <= 0) gamma <- 1.0
   } else {
     # Full matrix: B is n x n
     if (!is.null(hess)) {
-      # Hybrid mode: initialize from exact Hessian
-      b_current <- hess(x_current)
+      # Exact Hessian: initialize from H(x_0)
+      b_current <- hess(x_current, ...)
       hess_evals <- hess_evals + 1
     } else {
-      # Pure QN: initialize with scaled identity
-      b_current <- diag(n)
+      # Default: FD Hessian from the gradient (one-time at x_0)
+      b_current <- fd_hess_from_grad(x_current)
+      gr_evals <- gr_evals + 2 * n
     }
   }
 
@@ -212,7 +234,7 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL,
       y_current <- tau_k * v_current + (1 - tau_k) * x_current
 
       # Use y_current for gradient evaluation
-      g_eval <- gr(y_current)
+      g_eval <- gr(y_current, ...)
       gr_evals <- gr_evals + 1
     } else {
       y_current <- x_current
@@ -291,7 +313,7 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL,
     x_trial <- box_result$x_new
 
     # Evaluate trial point
-    f_trial <- fn(x_trial)
+    f_trial <- fn(x_trial, ...)
     fn_evals <- fn_evals + 1
 
     if (!check_finite(f_trial, rep(0, n))) {
@@ -320,7 +342,7 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL,
 
       x_current <- x_trial
       f_current <- f_trial
-      g_current <- gr(x_current)
+      g_current <- gr(x_current, ...)
       gr_evals <- gr_evals + 1
 
       if (!check_finite(f_current, g_current)) {

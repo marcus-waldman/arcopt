@@ -50,6 +50,44 @@ quadratic_hess <- function(x) diag(c(1, 10))
 # Basic Functionality Tests
 # =============================================================================
 
+test_that("arcopt_qn forwards ... to fn and gr", {
+  # Scaled sphere: f(x; s) = s * sum(x^2)
+  scaled_fn <- function(x, scale) scale * sum(x^2)
+  scaled_gr <- function(x, scale) scale * 2 * x
+
+  result <- arcopt_qn(
+    x0 = c(5, 5),
+    fn = scaled_fn,
+    gr = scaled_gr,
+    scale = 2,
+    control = list(qn_method = "sr1", trace = 0)
+  )
+
+  expect_true(result$converged)
+  expect_equal(result$par, c(0, 0), tolerance = 1e-4)
+})
+
+test_that("arcopt_qn forwards ... to hess in hybrid mode", {
+  # Scaled sphere with Hessian
+  scaled_fn <- function(x, scale) scale * sum(x^2)
+  scaled_gr <- function(x, scale) scale * 2 * x
+  scaled_hess <- function(x, scale) scale * 2 * diag(length(x))
+
+  result <- arcopt_qn(
+    x0 = c(5, 5),
+    fn = scaled_fn,
+    gr = scaled_gr,
+    hess = scaled_hess,
+    scale = 2,
+    control = list(qn_method = "sr1", trace = 0)
+  )
+
+  expect_true(result$converged)
+  expect_equal(result$par, c(0, 0), tolerance = 1e-4)
+  # Hessian should have been evaluated once for initialization
+  expect_equal(result$evaluations$hess, 1)
+})
+
 test_that("arcopt_qn validates inputs correctly", {
   # Invalid x0
 

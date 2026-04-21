@@ -477,6 +477,44 @@ test_that("momentum follows Gao et al. (correct beta formula)", {
   expect_lt(result$iterations, 50)  # Should converge faster than without momentum
 })
 
+test_that("arcopt forwards ... to fn, gr, and hess", {
+  # Scaled sphere: f(x; s) = s * sum(x^2)
+  scaled_fn <- function(x, scale) scale * sum(x^2)
+  scaled_gr <- function(x, scale) scale * 2 * x
+  scaled_hess <- function(x, scale) scale * 2 * diag(length(x))
+
+  result <- arcopt(
+    x0 = c(5, 5),
+    fn = scaled_fn,
+    gr = scaled_gr,
+    hess = scaled_hess,
+    scale = 2
+  )
+
+  expect_true(result$converged)
+  expect_equal(result$par, c(0, 0), tolerance = 1e-6)
+  expect_equal(result$value, 0, tolerance = 1e-8)
+})
+
+test_that("arcopt forwards ... through use_qn dispatch", {
+  # Verify ... reaches arcopt_qn when use_qn = TRUE
+  scaled_fn <- function(x, scale) scale * sum(x^2)
+  scaled_gr <- function(x, scale) scale * 2 * x
+  scaled_hess <- function(x, scale) scale * 2 * diag(length(x))
+
+  result <- arcopt(
+    x0 = c(5, 5),
+    fn = scaled_fn,
+    gr = scaled_gr,
+    hess = scaled_hess,
+    scale = 2,
+    control = list(use_qn = TRUE, qn_method = "sr1", trace = 0)
+  )
+
+  expect_true(result$converged)
+  expect_equal(result$par, c(0, 0), tolerance = 1e-4)
+})
+
 test_that("momentum maintains monotonicity", {
   # Momentum should never increase function value (at accepted points)
   # Note: This test verifies that the bisection search ensures monotonicity
