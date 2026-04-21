@@ -1,0 +1,529 @@
+# Scalable ARC Methods for Large-Scale Optimization (Deferred)
+
+## Overview
+
+This document preserves the ARCqK multi-shift CG-Lanczos implementation (Algorithm 5b) that was deferred from the initial arcopt release to maintain focus on the core use case: statisticians with 2-500 parameters and analytic Hessians.
+
+## Related branch: `scalable-arc`
+
+The limited-memory quasi-Newton methods (`qn_method = "lbfgs" | "lsr1" | "lhybrid"`) and the Woodbury-identity cubic subproblem solver (`R/cubic_woodbury.R`) were removed from `main` on 2026-04-20 because the cubic subproblem solver is still `O(n^3)` through the eigendecomposition path, so a limited-memory `B_k` did not deliver a scalability advantage on its own.
+
+The full implementation — including `update_lbfgs()`, `update_lsr1()`, `update_lhybrid()`, the Woodbury solver `solve_cubic_woodbury()`, and the associated test suite — is preserved on the `scalable-arc` branch. When the matrix-free CG-Lanczos solver (Algorithm 5b below) is reintroduced, the limited-memory updates on that branch become the natural companion: they provide the cheap `B_k v` products the Lanczos iteration needs, closing the loop on `O(n)`-memory / `O(kn)`-work optimization.
+
+Until then, `main` targets the dense-Hessian regime documented in `design/design-principles.qmd`.
+
+## When This Becomes Relevant
+
+ARCqK methods should be reconsidered when:
+
+- **Problem size**: n > 500 parameters
+- **Sparse Hessians**: Most elements zero, making full matrix storage wasteful
+- **Matrix-free optimization**: Only Hessian-vector products available
+  - Automatic differentiation (JAX, PyTorch autodiff via R interfaces)
+  - Finite-difference Hessian-vector products: `(∇f(x + εv) - ∇f(x)) / ε`
+  - Implicit Hessians from neural network architectures
+- **Users providing `hess_vec`** instead of full Hessian function
+
+## Why Deferred
+
+**Design Decision**: "Do one thing and do it well"
+
+1. **Target audience mismatch**: arcopt targets statisticians with 2-500 parameters and analytic Hessians. ARCqK is designed for n > 500 and matrix-free methods.
+
+2. **Performance issues on small problems**: Benchmarks showed ARCqK performs poorly on problems with n < 100 due to:
+   - Discrete shift selection causing accuracy loss
+   - Lanczos breakdown on easy problems
+   - Overhead of managing 61 shifts
+
+3. **Premature optimization**: Early-stage package development. ARCqK adds significant complexity (260 lines of code, 18 additional tests) for an unvalidated use case.
+
+4. **Maintenance burden**: Three solvers + dispatcher increases testing surface and documentation requirements.
+
+---
+
+## Algorithm 5b: ARCqK Multi-Shift CG-Lanczos
+
+### Mathematical Formulation
+
+Solve the cubic subproblem:
+$$\min_{s} \quad m(s) = g^T s + \frac{1}{2} s^T H s + \frac{\sigma}{3} \|s\|^3$$
+
+This approach solves multiple shifted systems $(H + \lambda_i I)d = -g$ simultaneously using CG-Lanczos with a single Hessian-vector product per iteration. Negative curvature is automatically detected when $\gamma_j < 0$ during CG, allowing early termination of inadequate shifts.
+
+**Computational advantages**:
+- Single Hessian-vector product per iteration (independent of number of shifts m)
+- O(m × n) storage for solutions and search directions
+- No explicit eigenvalue computation required
+- Reuse of solutions: if iteration unsuccessful, try larger shift (already computed)
+
+**Typical parameters**:
+- ψ = 10^(1/2) ≈ 3.16 (shift spacing ratio)
+- e_L = -10, e_U = 20 → shifts span 10^-10 to 10^20
+- m = 61 shifts (geometric discretization)
+
+### Pseudocode
+
+```
+ALGORITHM 5b: ARCqK Multi-Shift Cubic Solver
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  g           Gradient vector
+  Hv_func     Function computing Hessian-vector products: Hv_func(v) → Hv
+  σ           Regularization parameter
+  ψ           Shift spacing ratio (e.g., 10^(1/2) ≈ 3.16)
+  e_L         Minimum shift exponent (e.g., -10 → λ_min = 10^(-10))
+  e_U         Maximum shift exponent (e.g., 20 → λ_max = 10^20)
+  ζ           Residual tolerance exponent (e.g., 0.5)
+  ξ           Residual tolerance constant (e.g., 1e-6)
+  max_cg_iter Maximum CG iterations (e.g., min(100, 2n))
+
+OUTPUT:
+  s           Solution (step from best shift)
+  λ           Selected shift
+  converged   TRUE if CG converged for selected shift
+
+PROCEDURE:
+  0. HANDLE ZERO GRADIENT:
+     IF ||g|| < machine_epsilon THEN
+       RETURN (s = 0, λ = 0, converged = TRUE)
+     END IF
+
+  1. DISCRETIZE SHIFTS:
+     m ← ceil((e_U - e_L) / log₁₀(ψ))
+     λ₀ ← 10^e_L
+     FOR i = 0 TO m DO
+       shifts[i] ← λ₀ × ψ^i
+       active[i] ← TRUE
+     END FOR
+
+  2. INITIALIZE CG-LANCZOS:
+     x⁽ⁱ⁾ ← 0 for all i    [m+1 solution vectors]
+     μ₀ ← ||g||
+     v₀ ← g / μ₀           [first Lanczos vector]
+     p⁽ⁱ⁾ ← -g for all i   [m+1 search directions, negative for minimization]
+     σ⁽ⁱ⁾ ← μ₀ for all i    [residual norms]
+     π⁽ⁱ⁾ ← μ₀² for all i   [||p||² values]
+     v₋₁ ← 0
+     ω₋₁ ← 0, γ₋₁ ← 1
+
+  3. CG-LANCZOS ITERATION:
+     FOR j = 0 TO max_cg_iter DO
+       [=== LANCZOS PART (shift-independent) ===]
+       Hvⱼ ← Hv_func(vⱼ)              [single Hessian-vector product]
+       δⱼ ← vⱼ^T Hvⱼ
+       temp ← Hvⱼ - δⱼ vⱼ - μⱼ v_{j-1}
+       μⱼ₊₁ ← ||temp||
+       IF μⱼ₊₁ < machine_epsilon THEN BREAK END IF    [Lanczos breakdown]
+       vⱼ₊₁ ← temp / μⱼ₊₁
+
+       [=== CG PART (for each active shift) ===]
+       any_active ← FALSE
+       FOR i = 0 TO m DO
+         IF NOT active[i] THEN CONTINUE END IF
+
+         δⱼ⁽ⁱ⁾ ← δⱼ + shifts[i]
+         γⱼ⁽ⁱ⁾ ← 1 / (δⱼ⁽ⁱ⁾ - ωⱼ₋₁⁽ⁱ⁾ / γⱼ₋₁⁽ⁱ⁾)
+
+         [NEGATIVE CURVATURE CHECK]
+         IF γⱼ⁽ⁱ⁾ < 0 THEN
+           active[i] ← FALSE
+           indefinite_count ← indefinite_count + 1
+           CONTINUE
+         END IF
+
+         ωⱼ⁽ⁱ⁾ ← (μⱼ₊₁ × γⱼ⁽ⁱ⁾)²
+         σⱼ₊₁⁽ⁱ⁾ ← -μⱼ₊₁ × γⱼ⁽ⁱ⁾ × σⱼ⁽ⁱ⁾
+         xⱼ₊₁⁽ⁱ⁾ ← xⱼ⁽ⁱ⁾ + γⱼ⁽ⁱ⁾ × pⱼ⁽ⁱ⁾
+         pⱼ₊₁⁽ⁱ⁾ ← σⱼ₊₁⁽ⁱ⁾ × vⱼ₊₁ + ωⱼ⁽ⁱ⁾ × pⱼ⁽ⁱ⁾
+         πⱼ₊₁⁽ⁱ⁾ ← σⱼ₊₁⁽ⁱ⁾² + ωⱼ⁽ⁱ⁾² × πⱼ⁽ⁱ⁾
+
+         [CONVERGENCE CHECK]
+         tol_i ← ξ × min(||g||, ||xⱼ₊₁⁽ⁱ⁾||)^(1+ζ)
+         IF |σⱼ₊₁⁽ⁱ⁾| ≤ tol_i THEN
+           converged[i] ← TRUE
+         END IF
+
+         any_active ← TRUE
+       END FOR
+
+       IF NOT any_active THEN BREAK END IF    [all systems terminated]
+     END FOR
+
+  4. SELECT BEST SHIFT:
+     [Find smallest non-indefinite shift index]
+     i_plus ← min{i : active[i] OR converged[i]}
+
+     [Among valid shifts, find closest to satisfying secular equation]
+     best_i ← i_plus
+     best_error ← ∞
+     FOR i = i_plus TO m DO
+       IF active[i] OR converged[i] THEN
+         error ← |σ × ||x⁽ⁱ⁾|| - shifts[i]|
+         IF error < best_error THEN
+           best_error ← error
+           best_i ← i
+         END IF
+       END IF
+     END FOR
+
+     s ← x⁽ᵇᵉˢᵗ_ⁱ⁾
+     λ ← shifts[best_i]
+
+  5. COMPUTE PREDICTED REDUCTION:
+     Hs ← Hv_func(s)
+     pred_reduction ← -g^T s - ½ s^T Hs - (σ/3) ||s||³
+
+  RETURN (s, λ, pred_reduction, converged[best_i])
+```
+
+---
+
+## Implementation Notes (R Package)
+
+**Previous implementation**: `R/cubic_cg.R` (220 lines, removed 2026-01)
+
+### Key Implementation Details
+
+1. **Negative Curvature Detection**: When γⱼ⁽ⁱ⁾ < 0, this indicates pⱼ^T (H + λᵢI) pⱼ < 0, meaning the shift λᵢ is insufficient to make H + λᵢI positive definite. The shift is immediately deactivated.
+
+2. **Shift Selection Strategy**: After CG iteration, the algorithm:
+   - Finds the smallest non-indefinite shift index i_plus
+   - Among valid shifts (i ≥ i_plus), selects the one minimizing |σ × ||x⁽ⁱ⁾|| - λᵢ|
+   - This selects the shift closest to satisfying the secular equation ||s|| = λ/σ
+
+3. **Lanczos Breakdown**: When μⱼ₊₁ < ε, the Lanczos recurrence numerically breaks down. The algorithm terminates and returns the best solution found so far.
+
+4. **Memory Management**: Stores m+1 solution vectors x⁽ⁱ⁾ and search directions p⁽ⁱ⁾ simultaneously. For n=1000, m=61: ~500 KB memory.
+
+5. **Convergence Tolerance**: Uses adaptive tolerance tol_i = ξ × min(||g||, ||x||)^(1+ζ) that becomes tighter as the solution improves.
+
+### Control Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `shift_psi` | √10 ≈ 3.16 | Geometric spacing ratio between shifts |
+| `shift_e_lower` | -10 | Minimum shift exponent (10^-10) |
+| `shift_e_upper` | 20 | Maximum shift exponent (10^20) |
+| `max_cg_iter` | min(100, 2n) | Maximum CG iterations |
+| `residual_zeta` | 0.5 | Residual tolerance exponent |
+| `residual_xi` | 1e-6 | Residual tolerance constant |
+
+---
+
+## Representative Test Cases
+
+### Test 1: Positive Definite Hessian
+```r
+H <- matrix(c(2, 0, 0, 3), 2, 2)
+g <- c(1, 2)
+sigma <- 1.0
+
+hess_vec <- function(v) as.vector(H %*% v)
+result <- solve_cubic_cg(g, hess_vec, sigma)
+
+# Expected: converged = TRUE, lambda ≥ 0, finite pred_reduction
+```
+
+### Test 2: Indefinite Hessian (Negative Curvature Detection)
+```r
+H <- matrix(c(-5, 0, 0, 2), 2, 2)  # eigenvalues: -5, 2
+g <- c(1, 1)
+sigma <- 1.0
+
+hess_vec <- function(v) as.vector(H %*% v)
+result <- solve_cubic_cg(g, hess_vec, sigma)
+
+# Expected: lambda ≥ 5 (must shift to make PD)
+# CG detects gamma_j < 0 for shifts < 5 and deactivates them
+```
+
+### Test 3: Custom hess_vec (Matrix-Free)
+```r
+# Implicit diagonal Hessian: H = diag(c(2, 3, 4))
+hess_vec <- function(v) c(2 * v[1], 3 * v[2], 4 * v[3])
+g <- c(1, 2, 3)
+sigma <- 1.0
+
+result <- solve_cubic_cg(g, hess_vec, sigma)
+
+# Expected: Works without forming full H matrix
+```
+
+### Test 4: Zero Gradient Edge Case
+```r
+g <- c(0, 0)
+hess_vec <- function(v) v  # Any Hessian
+
+result <- solve_cubic_cg(g, hess_vec, sigma = 1.0)
+
+# Expected: s = [0, 0], lambda = 0, converged = TRUE, cg_iters = 0
+```
+
+### Test 5: Sigma Effect on Step Length
+```r
+H <- matrix(c(2, 0, 0, 3), 2, 2)
+g <- c(1, 2)
+
+result_small <- solve_cubic_cg(g, hess_vec, sigma = 0.5)
+result_large <- solve_cubic_cg(g, hess_vec, sigma = 2.0)
+
+# Expected: ||s_large|| < ||s_small|| (larger sigma → shorter steps)
+```
+
+### Test 6: Agreement with Eigendecomposition Solver
+```r
+H <- matrix(c(4, 1, 1, 3), 2, 2)
+g <- c(1, 1)
+sigma <- 1.0
+
+result_cg <- solve_cubic_cg(g, hess_vec_fd(H), sigma)
+result_eigen <- solve_cubic_eigen(g, H, sigma)
+
+# Expected: ||s_cg - s_eigen|| < 0.1 (allow loose tolerance)
+# Note: CG and eigen may not agree exactly due to discrete shifts
+```
+
+---
+
+## Performance Characteristics
+
+**Strengths:**
+- O(kn) Hessian-vector products (k = CG iterations, typically 10-50)
+- O(mn) memory (m = 61 shifts)
+- No O(n³) eigendecomposition required
+- Matrix-free: works with implicit Hessians
+
+**Weaknesses observed in benchmarks:**
+- Poor accuracy on small problems (n < 100)
+- Discrete shift selection causes "stepping" in solutions
+- Lanczos breakdown on easy problems where exact solution found early
+- Overhead of managing 61 shifts dominates for small n
+
+**Recommended use cases:**
+- n > 500 (computational advantage over eigendecomposition)
+- Sparse Hessians (store as sparse matrix, use sparse mat-vec)
+- Matrix-free optimization (autodiff, finite differences)
+
+**Not recommended:**
+- n < 500 with full dense Hessian (use eigendecomposition instead)
+- High-accuracy requirements (discrete shifts limit precision)
+- Early-stage algorithm development (use simpler eigen solver first)
+
+---
+
+## Future Reimplementation Considerations
+
+When reconsidering ARCqK for arcopt:
+
+1. **Validate use case first**: Survey users to confirm demand for n > 500 or matrix-free optimization before implementing.
+
+2. **Consider adaptive shift selection**: Instead of fixed 61-shift grid, use adaptive refinement around promising shifts to improve accuracy.
+
+3. **Benchmark against modern alternatives**:
+   - Trust-region Newton-CG (scipy.optimize.minimize with trust-ncg)
+   - Krylov-based ARC variants
+   - Sketching-based cubic regularization
+
+4. **Profile memory usage**: m=61 shifts × n-dimensional vectors can be prohibitive for very large n. Consider reducing m or using iterative refinement.
+
+5. **Test on real statistical problems**: Extended Rosenbrock and synthetic test functions may not reflect actual usage patterns.
+
+6. **Integration complexity**: Dispatcher auto-selection, parameter tuning, and documentation added ~500 lines of code for uncertain benefit.
+
+---
+
+## References
+
+**Primary Source:**
+> Dussault, J. P., Migot, T., Orban, D., & Soares, A. (2024). Scalable adaptive cubic regularization methods. *SIAM Journal on Optimization*, 34(1), 1-28.
+
+**Related Work:**
+> Cartis, C., Gould, N. I., & Toint, P. L. (2011). Adaptive cubic regularisation methods for unconstrained optimization. Part II: worst-case function- and derivative-evaluation complexity. *Mathematical Programming*, 130(2), 295-319.
+
+**Implementation History:**
+- Added to arcopt: Commit [hash] (2025-12)
+- Marked experimental: Documentation warned of small-problem issues
+- Removed from package: Commit [hash] (2026-01) - deferred to future work per "do one thing well" principle
+
+---
+
+## Contact
+
+If you're working on large-scale optimization problems and need ARCqK functionality:
+
+1. Check if the eigendecomposition solver (Algorithm 5a) meets your needs first
+2. Consider contributing ARCqK reimplementation via GitHub PR
+3. Open an issue describing your use case and performance requirements
+
+The preserved implementation and test suite provide a solid foundation for future work when validated use cases emerge.
+
+---
+
+## Algorithm 4: SR1 Quasi-Newton Update (Deferred)
+
+### When This Becomes Relevant
+
+SR1 quasi-Newton updates should be reconsidered when:
+
+- **Expensive loss functions**: Function evaluation cost >> Hessian approximation cost
+- **Small-medium problems (n = 2-500)**: Where full BFGS memory is tractable
+- **Analytic Hessian unavailable**: But gradient computation is cheap
+- **User preference**: Explicitly requests quasi-Newton over finite differences
+
+**Current recommendation**: Use finite-difference Hessian instead of SR1 for most statistical applications. FD provides exact curvature information that cubic regularization depends on.
+
+### Why Deferred
+
+**Design Decision**: "Hessian-centric first, quasi-Newton later"
+
+1. **Cubic regularization critically depends on accurate curvature**: SR1 approximations may degrade model quality, leading to slower convergence or incorrect saddle point escape
+
+2. **Target audience has analytic Hessians**: Statistical likelihoods typically have tractable second derivatives. Users who can write `gr()` can usually write `hess()`.
+
+3. **Finite differences are simpler and more robust**: For users without analytic Hessians, FD provides exact curvature at O(n²) gradient evaluations. This is practical for n ≤ 500 with parallelization.
+
+4. **Unclear benefit over FD in practice**: Benchmarks needed to validate that SR1 + ARC outperforms FD + ARC on real statistical problems before adding complexity.
+
+5. **Generic safeguard infrastructure already exists**: The stagnation detection in `R/safeguards.R` works for any quasi-Newton method via the `is_qn` parameter, so no code rewrite needed if SR1 is added later.
+
+---
+
+### Mathematical Formulation
+
+The SR1 update maintains a Hessian approximation B_k:
+$$B_{k+1} = B_k + \frac{(y_k - B_k s_k)(y_k - B_k s_k)^T}{(y_k - B_k s_k)^T s_k}$$
+
+where:
+- s_k = x_{k+1} - x_k (step taken)
+- y_k = g_{k+1} - g_k (gradient difference)
+
+**Key property**: SR1 can represent indefinite Hessians (negative eigenvalues), making it compatible with ARC's saddle-point escape capability. BFGS forces positive definiteness, wasting this advantage.
+
+### Pseudocode (from design/pseudocode.qmd Algorithm 4)
+
+```
+ALGORITHM 4: SR1 Update with Safeguards
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  B_k         Current Hessian approximation
+  s_k         Step taken: s_k = x_{k+1} - x_k
+  y_k         Gradient difference: y_k = g_{k+1} - g_k
+  τ           Skip threshold (e.g., 10⁻⁸ to 10⁻⁴)
+  N_skip      Maximum consecutive skips before restart
+  skip_count  Counter of consecutive skipped updates
+
+OUTPUT:
+  B_{k+1}     Updated Hessian approximation
+  skip_count  Updated skip counter
+
+PROCEDURE:
+  1. COMPUTE UPDATE VECTORS:
+     r_k ← y_k - B_k s_k
+     denom ← r_k^T s_k
+
+  2. CHECK SKIP CONDITION:
+     IF |denom| < τ · ||r_k|| · ||s_k|| THEN
+       B_{k+1} ← B_k                    [skip update]
+       skip_count ← skip_count + 1
+     ELSE
+       B_{k+1} ← B_k + (r_k r_k^T) / denom    [apply SR1]
+       skip_count ← 0
+     END IF
+
+  3. CHECK FOR RESTART:
+     IF skip_count ≥ N_skip THEN
+       α ← y_k^T s_k / (s_k^T s_k)      [Barzilai-Borwein scaling]
+       IF α ≤ 0 THEN α ← 1 END IF
+       B_{k+1} ← α · I                   [restart with scaled identity]
+       skip_count ← 0
+     END IF
+
+  RETURN B_{k+1}, skip_count
+```
+
+### Safeguard Parameters
+
+| Parameter | Default | Valid Range | Description |
+|-----------|---------|-------------|-------------|
+| `sr1_skip_tol` | 10^-6 | (10^-8, 10^-4) | Denominator threshold τ |
+| `sr1_restart_after` | 5 | {3, 4, 5, ...} | Restarts after N skips |
+| `sr1_init_scale` | "bb" | "bb", "identity" | Restart scaling method |
+
+**Why SR1 with ARC**:
+- SR1 can represent indefinite Hessians (negative eigenvalues)
+- ARC handles indefinite curvature naturally via cubic regularization
+- BFGS forces positive definiteness, wasting ARC's saddle-escape capability
+
+### Integration with Main Loop
+
+When SR1 is enabled, Algorithm 1 would:
+1. Initialize B_0 = I (or Barzilai-Borwein scaled identity)
+2. Skip Newton step attempt (quasi-Newton Hessians are approximations)
+3. Always solve cubic subproblem with B_k instead of H_k
+4. After step acceptance, update B_k using Algorithm 4
+5. Track skip_count for diagnostics (trace level 3)
+
+### Representative Test Cases
+
+**Test 1: Skip condition triggered**
+```r
+# Denominator too small: y^T s ≈ 0
+s_k <- c(1, 0)
+y_k <- c(0, 1)  # Orthogonal to s_k
+B_k <- diag(2)
+
+# Expected: Update skipped, B_{k+1} = B_k, skip_count incremented
+```
+
+**Test 2: Valid SR1 update**
+```r
+# Denominator sufficient
+s_k <- c(1, 0)
+y_k <- c(2, 0)
+B_k <- diag(2)
+
+# Expected: B_{k+1} ≠ B_k, skip_count reset to 0
+```
+
+**Test 3: Restart after consecutive skips**
+```r
+# Simulate 5 consecutive skips
+# Expected: B_k reset to α·I where α from Barzilai-Borwein
+```
+
+---
+
+### Literature Review
+
+See `design/historical/quasi-newton-literature-review.md` for:
+- SR1 vs BFGS comparison in ARC context
+- Safeguarding strategies (skip rules, restart, modified variants)
+- Theoretical results on SR1 with cubic regularization
+
+**Key references**:
+- Benson & Shanno (2018): Cubic regularization in symmetric rank-1 quasi-Newton methods
+- Nocedal & Wright (2006): Standard SR1 update and skip condition
+- Bergamaschi et al. (2020): Denominator threshold recommendations
+
+---
+
+### Implementation Notes (If Reconsidered)
+
+**Previous implementation status**: NOT implemented in R/ directory
+- Only `use_sr1` parameter documented in `R/arcopt.R` (removed 2026-01-04)
+- Generic stagnation detection exists in `R/safeguards.R` (works for any QN method)
+- No actual SR1 update code
+
+**If reimplementing**:
+1. Create `R/sr1_update.R` with `update_sr1(B, s, y, control)` function
+2. Add initialization logic in `arcopt()` to set B_0
+3. Integrate update call in main loop after step acceptance
+4. Add tests to `tests/testthat/test-sr1.R` covering skip, update, restart
+5. Benchmark against FD Hessian approach on real statistical problems
+6. Document performance trade-offs in vignette
+
+**Expected file size**: ~100 lines implementation + ~150 lines tests
+
+---

@@ -76,12 +76,8 @@ rho_k values (see below). Includes automatic FD refresh of B_k
 when SR1 is stuck. Recommended for saddle-prone problems.
 \item "sr1": Symmetric Rank-1 (allows indefinite Hessians)
 \item "bfgs": Standard BFGS (maintains positive definiteness)
-\item "lbfgs": Limited-memory BFGS
-\item "lsr1": Limited-memory SR1
-\item "lhybrid": Limited-memory hybrid (L-BFGS -> L-SR1 -> Powell)
 }
 \item \code{bfgs_tol}: Curvature tolerance for BFGS in hybrid mode (default: 1e-10)
-\item \code{qn_memory}: History size for limited-memory methods (default: 10)
 \item \code{sr1_skip_tol}: SR1 skip test tolerance (default: 1e-8)
 \item \code{sr1_restart_threshold}: Consecutive skips before restart (default: 5)
 \item \code{use_accel_qn}: \strong{EXPERIMENTAL} Enable Nesterov acceleration (default:

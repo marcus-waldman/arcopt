@@ -160,28 +160,6 @@ test_that("arcopt_qn converges on sphere function with BFGS", {
   expect_equal(result$par, rep(0, 3), tolerance = 1e-4)
 })
 
-test_that("arcopt_qn converges on sphere function with L-BFGS", {
-  x0 <- c(5, -3, 2)
-  result <- arcopt_qn(
-    x0, sphere_fn, sphere_gr,
-    control = list(qn_method = "lbfgs", qn_memory = 5, trace = 0)
-  )
-
-  expect_true(result$converged)
-  expect_equal(result$par, rep(0, 3), tolerance = 1e-4)
-})
-
-test_that("arcopt_qn converges on sphere function with L-SR1", {
-  x0 <- c(5, -3, 2)
-  result <- arcopt_qn(
-    x0, sphere_fn, sphere_gr,
-    control = list(qn_method = "lsr1", qn_memory = 5, trace = 0)
-  )
-
-  expect_true(result$converged)
-  expect_equal(result$par, rep(0, 3), tolerance = 1e-4)
-})
-
 test_that("arcopt_qn converges on ill-conditioned quadratic", {
   x0 <- c(10, 10)
   result <- arcopt_qn(
@@ -322,8 +300,6 @@ test_that("arcopt_qn validates bound ordering", {
 test_that("arcopt_qn converges on Rosenbrock 2D (full-matrix methods)", {
   x0 <- c(-1.2, 1)
 
-  # Only test full-matrix methods on Rosenbrock
-  # Limited-memory methods (lbfgs, lsr1) struggle with ill-conditioning
   methods <- c("sr1", "bfgs")
 
   for (method in methods) {
@@ -343,36 +319,6 @@ test_that("arcopt_qn converges on Rosenbrock 2D (full-matrix methods)", {
       info = paste("Method:", method)
     )
   }
-})
-
-
-# =============================================================================
-# Limited Memory Tests
-# =============================================================================
-
-test_that("L-BFGS respects memory limit", {
-  x0 <- c(5, -3, 2, 1, -1)
-
-  result <- arcopt_qn(
-    x0, sphere_fn, sphere_gr,
-    control = list(qn_method = "lbfgs", qn_memory = 3, trace = 0)
-  )
-
-  expect_true(result$converged)
-  # Hessian should be NULL for limited-memory
-  expect_null(result$hessian)
-})
-
-test_that("L-SR1 respects memory limit", {
-  x0 <- c(5, -3, 2, 1, -1)
-
-  result <- arcopt_qn(
-    x0, sphere_fn, sphere_gr,
-    control = list(qn_method = "lsr1", qn_memory = 3, trace = 0)
-  )
-
-  expect_true(result$converged)
-  expect_null(result$hessian)
 })
 
 
@@ -508,26 +454,13 @@ test_that("arcopt_qn handles large sigma_max", {
 # Higher Dimensional Tests
 # =============================================================================
 
-test_that("arcopt_qn handles moderate dimensions with L-BFGS", {
+test_that("arcopt_qn handles moderate dimensions with full-matrix SR1", {
   n <- 20
   x0 <- rep(5, n)
 
   result <- arcopt_qn(
     x0, sphere_fn, sphere_gr,
-    control = list(qn_method = "lbfgs", qn_memory = 10, trace = 0)
-  )
-
-  expect_true(result$converged)
-  expect_equal(result$par, rep(0, n), tolerance = 1e-4)
-})
-
-test_that("arcopt_qn handles moderate dimensions with L-SR1", {
-  n <- 20
-  x0 <- rep(5, n)
-
-  result <- arcopt_qn(
-    x0, sphere_fn, sphere_gr,
-    control = list(qn_method = "lsr1", qn_memory = 10, trace = 0)
+    control = list(qn_method = "sr1", trace = 0)
   )
 
   expect_true(result$converged)
@@ -716,89 +649,6 @@ test_that("arcopt_qn hybrid tracks QN updates correctly", {
   expect_true(result$qn_updates > 0)
   # Hybrid method should rarely skip since Powell is a fallback
   expect_true(result$qn_skips <= result$qn_updates)
-})
-
-
-# =============================================================================
-# L-Hybrid Integration Tests
-# =============================================================================
-
-test_that("arcopt_qn converges with lhybrid on sphere", {
-  x0 <- c(5, 5)
-  result <- arcopt_qn(
-    x0, sphere_fn, sphere_gr,
-    control = list(qn_method = "lhybrid", trace = 0)
-  )
-
-  expect_true(result$converged)
-  expect_equal(result$par, c(0, 0), tolerance = 1e-4)
-  expect_true(result$qn_updates > 0)
-})
-
-test_that("arcopt_qn converges with lhybrid on Rosenbrock", {
-  x0 <- c(-1.2, 1)
-  result <- arcopt_qn(
-    x0, rosenbrock_fn, rosenbrock_gr,
-    control = list(qn_method = "lhybrid", trace = 0)
-  )
-
-  expect_true(result$converged)
-  expect_equal(result$par, c(1, 1), tolerance = 1e-4)
-})
-
-test_that("arcopt_qn converges with lhybrid on quadratic", {
-  x0 <- c(10, 10)
-  result <- arcopt_qn(
-    x0, quadratic_fn, quadratic_gr,
-    control = list(qn_method = "lhybrid", trace = 0)
-  )
-
-  expect_true(result$converged)
-  expect_equal(result$par, c(0, 0), tolerance = 1e-4)
-})
-
-test_that("arcopt_qn lhybrid respects memory limit", {
-  x0 <- rep(1, 20)  # Higher dimension
-  result <- arcopt_qn(
-    x0,
-    fn = function(x) sum(x^2),
-    gr = function(x) 2 * x,
-    control = list(qn_method = "lhybrid", qn_memory = 5, trace = 0)
-  )
-
-  expect_true(result$converged)
-  expect_equal(result$par, rep(0, 20), tolerance = 1e-3)
-})
-
-test_that("arcopt_qn lhybrid handles non-convex functions", {
-  # Beale function (non-convex)
-  beale_fn <- function(x) {
-    (1.5 - x[1] * (1 - x[2]))^2 +
-      (2.25 - x[1] * (1 - x[2]^2))^2 +
-      (2.625 - x[1] * (1 - x[2]^3))^2
-  }
-  beale_gr <- function(x) {
-    g <- numeric(2)
-    y1 <- 1 - x[2]
-    y2 <- 1 - x[2]^2
-    y3 <- 1 - x[2]^3
-    r1 <- 1.5 - x[1] * y1
-    r2 <- 2.25 - x[1] * y2
-    r3 <- 2.625 - x[1] * y3
-    g[1] <- -2 * (r1 * y1 + r2 * y2 + r3 * y3)
-    g[2] <- 2 * x[1] * (r1 + 2 * r2 * x[2] + 3 * r3 * x[2]^2)
-    g
-  }
-
-  x0 <- c(0, 0)
-  result <- arcopt_qn(
-    x0, beale_fn, beale_gr,
-    control = list(qn_method = "lhybrid", trace = 0, maxit = 200)
-  )
-
-  # Optimal at (3, 0.5)
-  expect_true(result$converged)
-  expect_equal(result$par, c(3, 0.5), tolerance = 1e-3)
 })
 
 

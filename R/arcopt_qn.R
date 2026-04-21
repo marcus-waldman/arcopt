@@ -45,11 +45,7 @@
 #'     when SR1 is stuck. Recommended for saddle-prone problems.
 #'   - "sr1": Symmetric Rank-1 (allows indefinite Hessians)
 #'   - "bfgs": Standard BFGS (maintains positive definiteness)
-#'   - "lbfgs": Limited-memory BFGS
-#'   - "lsr1": Limited-memory SR1
-#'   - "lhybrid": Limited-memory hybrid (L-BFGS -> L-SR1 -> Powell)
 #' * `bfgs_tol`: Curvature tolerance for BFGS in hybrid mode (default: 1e-10)
-#' * `qn_memory`: History size for limited-memory methods (default: 10)
 #' * `sr1_skip_tol`: SR1 skip test tolerance (default: 1e-8)
 #' * `sr1_restart_threshold`: Consecutive skips before restart (default: 5)
 #' * `use_accel_qn`: **EXPERIMENTAL** Enable Nesterov acceleration (default:
@@ -122,7 +118,6 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
     gamma2 = 2.0,
     # QN-specific parameters
     qn_method = "hybrid",
-    qn_memory = 10L,
     bfgs_tol = 1e-10,
     sr1_skip_tol = 1e-8,
     sr1_restart_threshold = 5L,
@@ -154,13 +149,10 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
   control <- modifyList(control_defaults, control)
 
   # Validate QN method
-  valid_methods <- c("hybrid", "sr1", "bfgs", "lbfgs", "lsr1", "lhybrid")
+  valid_methods <- c("hybrid", "sr1", "bfgs")
   if (!control$qn_method %in% valid_methods) {
     stop("qn_method must be one of: ", paste(valid_methods, collapse = ", "))
   }
-
-  # Determine if using limited-memory method
-  use_limited_memory <- control$qn_method %in% c("lbfgs", "lsr1", "lhybrid")
 
   # Validate and project initial point to bounds
   x_current <- validate_and_project_initial(x0, lower, upper)
@@ -220,34 +212,15 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
     0.5 * (fd_mat + t(fd_mat))
   }
 
-  # Initialize Hessian approximation
-  if (use_limited_memory) {
-    # Limited-memory: use history structure
-    qn_history <- NULL
-    gamma <- 1.0  # Initial scaling
-
-    if (!is.null(hess)) {
-      h_init <- hess(x_current, ...)
-      hess_evals <- hess_evals + 1
-    } else {
-      # Default: FD Hessian from the gradient (one-time at x_0)
-      h_init <- fd_hess_from_grad(x_current)
-      gr_evals <- gr_evals + 2 * n
-    }
-    # Use average diagonal as gamma (positive entries only)
-    gamma <- mean(diag(h_init))
-    if (gamma <= 0) gamma <- 1.0
+  # Initialize full-matrix Hessian approximation (B is n x n)
+  if (!is.null(hess)) {
+    # Exact Hessian: initialize from H(x_0)
+    b_current <- hess(x_current, ...)
+    hess_evals <- hess_evals + 1
   } else {
-    # Full matrix: B is n x n
-    if (!is.null(hess)) {
-      # Exact Hessian: initialize from H(x_0)
-      b_current <- hess(x_current, ...)
-      hess_evals <- hess_evals + 1
-    } else {
-      # Default: FD Hessian from the gradient (one-time at x_0)
-      b_current <- fd_hess_from_grad(x_current)
-      gr_evals <- gr_evals + 2 * n
-    }
+    # Default: FD Hessian from the gradient (one-time at x_0)
+    b_current <- fd_hess_from_grad(x_current)
+    gr_evals <- gr_evals + 2 * n
   }
 
   # Store previous values
@@ -311,64 +284,20 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
       g_eval <- g_current
     }
 
-    # STEP 2: Solve cubic subproblem (use g_eval for acceleration, g_current otherwise)
+    # STEP 2: Solve cubic subproblem via eigendecomposition on the
+    # full-matrix approximation. (Use g_eval under acceleration,
+    # g_current otherwise.)
     g_subproblem <- g_eval
-    if (use_limited_memory) {
-      # Build compact form and use Woodbury solver
-      if (control$qn_method == "lsr1") {
-        compact <- lsr1_compact_form(qn_history)
-      } else {
-        compact <- lbfgs_compact_form(qn_history)
-      }
-
-      gamma_current <- if (!is.null(qn_history)) qn_history$gamma else gamma
-      # Ensure gamma is positive (required by Woodbury solver)
-      if (gamma_current <= 0) gamma_current <- 1.0
-
-      if (!is.null(compact)) {
-        cubic_result <- solve_cubic_woodbury(
-          g = g_subproblem,
-          gamma = gamma_current,
-          w = compact$w,
-          c_mat = compact$c_mat,
-          sigma = sigma_current
-        )
-      } else {
-        # No history yet, use simple solver
-        cubic_result <- solve_cubic_simple(
-          g = g_subproblem,
-          gamma = gamma_current,
-          sigma = sigma_current
-        )
-      }
-
-      s_current <- cubic_result$s
-    } else {
-      # Full QN: use eigendecomposition solver
-      cubic_result <- solve_cubic_subproblem_dispatch(
-        g = g_subproblem,
-        H = b_current,
-        sigma = sigma_current,
-        solver = "eigen"
-      )
-
-      s_current <- cubic_result$s
-    }
+    cubic_result <- solve_cubic_subproblem_dispatch(
+      g = g_subproblem,
+      H = b_current,
+      sigma = sigma_current,
+      solver = "eigen"
+    )
+    s_current <- cubic_result$s
 
     # Compute predicted reduction
-    if (use_limited_memory) {
-      # For limited-memory, B*s computed via compact form
-      if (!is.null(compact)) {
-        # B*s = gamma*s + w' * c_mat * w * s
-        w_s <- as.vector(compact$w %*% s_current)
-        b_s <- gamma_current * s_current +
-          as.vector(t(compact$w) %*% (compact$c_mat %*% w_s))
-      } else {
-        b_s <- gamma_current * s_current
-      }
-    } else {
-      b_s <- as.vector(b_current %*% s_current)
-    }
+    b_s <- as.vector(b_current %*% s_current)
 
     s_norm <- sqrt(sum(s_current^2))
     pred_reduction <- -(
@@ -432,179 +361,134 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
       s_vec <- x_current - x_previous
       y_vec <- g_current - g_previous
 
-      if (use_limited_memory) {
-        if (control$qn_method == "lhybrid") {
-          # L-Hybrid: L-BFGS -> L-SR1 -> Powell-damped L-BFGS
-          update_result <- update_lhybrid(
-            qn_history, s_vec, y_vec,
-            m = control$qn_memory,
-            bfgs_tol = control$bfgs_tol,
-            sr1_skip_tol = control$sr1_skip_tol
-          )
-          qn_history <- update_result$history
-          qn_updates <- qn_updates + 1
-        } else if (control$qn_method == "lsr1") {
-          # L-SR1 update
-          b_times_s <- if (!is.null(qn_history)) {
-            lsr1_multiply(qn_history, s_vec)
-          } else {
-            gamma * s_vec
-          }
-          qn_history <- update_lsr1(
-            qn_history, s_vec, y_vec,
-            m = control$qn_memory,
-            skip_tol = control$sr1_skip_tol,
-            b_times_s = b_times_s
-          )
-          if (qn_history$skipped) {
-            qn_skips <- qn_skips + 1
-          } else {
-            qn_updates <- qn_updates + 1
-          }
+      # Full-matrix QN update
+      if (control$qn_method == "hybrid") {
+        # State-aware routing: choose update priority based on whether
+        # B_k is currently indefinite or whether BFGS predictions have
+        # been drifting. See qn_route_* control parameters.
+        hybrid_fn <- if (routing_mode == "indefinite") {
+          update_hybrid_sr1_first
         } else {
-          # L-BFGS update
-          qn_history <- update_lbfgs(
-            qn_history, s_vec, y_vec,
-            m = control$qn_memory
-          )
-          # L-BFGS always updates if curvature condition satisfied
-          ys <- sum(y_vec * s_vec)
-          if (ys > .Machine$double.eps) {
-            qn_updates <- qn_updates + 1
-          } else {
-            qn_skips <- qn_skips + 1
-          }
+          update_hybrid
         }
-      } else {
-        # Full matrix update
-        if (control$qn_method == "hybrid") {
-          # State-aware routing: choose update priority based on whether
-          # B_k is currently indefinite or whether BFGS predictions have
-          # been drifting. See qn_route_* control parameters.
-          hybrid_fn <- if (routing_mode == "indefinite") {
-            update_hybrid_sr1_first
-          } else {
-            update_hybrid
-          }
-          update_result <- hybrid_fn(
-            b_current, s_vec, y_vec,
-            bfgs_tol = control$bfgs_tol,
-            sr1_skip_tol = control$sr1_skip_tol,
-            skip_count = skip_count,
-            restart_threshold = control$sr1_restart_threshold
-          )
-          b_current <- update_result$b
-          skip_count <- update_result$skip_count
+        update_result <- hybrid_fn(
+          b_current, s_vec, y_vec,
+          bfgs_tol = control$bfgs_tol,
+          sr1_skip_tol = control$sr1_skip_tol,
+          skip_count = skip_count,
+          restart_threshold = control$sr1_restart_threshold
+        )
+        b_current <- update_result$b
+        skip_count <- update_result$skip_count
 
-          # Update routing state based on lambda_min(B) and recent rho.
-          # lambda_min is cheap to obtain via Cholesky inertia: if chol()
-          # succeeds, B is positive definite; otherwise at least one
-          # eigenvalue is non-positive.
-          b_is_pd <- !inherits(
-            try(chol(b_current), silent = TRUE), "try-error"
-          )
+        # Update routing state based on lambda_min(B) and recent rho.
+        # lambda_min is cheap to obtain via Cholesky inertia: if chol()
+        # succeeds, B is positive definite; otherwise at least one
+        # eigenvalue is non-positive.
+        b_is_pd <- !inherits(
+          try(chol(b_current), silent = TRUE), "try-error"
+        )
 
-          # rho tracking: count consecutive "bad" predictions
+        # rho tracking: count consecutive "bad" predictions
+        if (is.finite(rho) && rho < control$qn_route_demote_rho) {
+          bad_rho_count <- bad_rho_count + 1L
+        } else {
+          bad_rho_count <- 0L
+        }
+
+        # Promote pd_count only when B is PD AND current step's rho
+        # looks healthy
+        if (b_is_pd && is.finite(rho) && rho > control$qn_route_promote_rho) {
+          pd_count <- pd_count + 1L
+        } else {
+          pd_count <- 0L
+        }
+
+        # Mode transitions
+        if (!b_is_pd) {
+          # Always enter indefinite mode when B has non-PD directions
+          routing_mode <- "indefinite"
+        } else if (routing_mode == "pd" &&
+                   bad_rho_count >= control$qn_route_demote_k) {
+          # Drift in BFGS predictions: fall back to SR1-first
+          routing_mode <- "indefinite"
+          bad_rho_count <- 0L
+        } else if (routing_mode == "indefinite" &&
+                   pd_count >= control$qn_route_promote_k) {
+          # B has been reliably PD and predictions good: promote
+          routing_mode <- "pd"
+          pd_count <- 0L
+        }
+
+        # FD refresh: two complementary triggers while routing is in
+        # indefinite mode.
+        #   (a) Drift: rho < demote_rho for K consecutive steps means
+        #       the current B's predictions don't match the objective.
+        #   (b) Stall: indefinite mode persists for qn_stuck_refresh_k
+        #       iterations without promoting to pd, which indicates
+        #       the iteration is tracking a persistent saddle (local
+        #       rho may be acceptable but global progress has stalled).
+        # Either trigger rebuilds B from a fresh FD Hessian at the
+        # current iterate (2*n gradient evals).
+        if (routing_mode == "indefinite") {
+          indef_iter_count <- indef_iter_count + 1L
           if (is.finite(rho) && rho < control$qn_route_demote_rho) {
-            bad_rho_count <- bad_rho_count + 1L
-          } else {
-            bad_rho_count <- 0L
-          }
-
-          # Promote pd_count only when B is PD AND current step's rho
-          # looks healthy
-          if (b_is_pd && is.finite(rho) && rho > control$qn_route_promote_rho) {
-            pd_count <- pd_count + 1L
-          } else {
-            pd_count <- 0L
-          }
-
-          # Mode transitions
-          if (!b_is_pd) {
-            # Always enter indefinite mode when B has non-PD directions
-            routing_mode <- "indefinite"
-          } else if (routing_mode == "pd" &&
-                     bad_rho_count >= control$qn_route_demote_k) {
-            # Drift in BFGS predictions: fall back to SR1-first
-            routing_mode <- "indefinite"
-            bad_rho_count <- 0L
-          } else if (routing_mode == "indefinite" &&
-                     pd_count >= control$qn_route_promote_k) {
-            # B has been reliably PD and predictions good: promote
-            routing_mode <- "pd"
-            pd_count <- 0L
-          }
-
-          # FD refresh: two complementary triggers while routing is in
-          # indefinite mode.
-          #   (a) Drift: rho < demote_rho for K consecutive steps means
-          #       the current B's predictions don't match the objective.
-          #   (b) Stall: indefinite mode persists for qn_stuck_refresh_k
-          #       iterations without promoting to pd, which indicates
-          #       the iteration is tracking a persistent saddle (local
-          #       rho may be acceptable but global progress has stalled).
-          # Either trigger rebuilds B from a fresh FD Hessian at the
-          # current iterate (2*n gradient evals).
-          if (routing_mode == "indefinite") {
-            indef_iter_count <- indef_iter_count + 1L
-            if (is.finite(rho) && rho < control$qn_route_demote_rho) {
-              indef_bad_rho_count <- indef_bad_rho_count + 1L
-            } else {
-              indef_bad_rho_count <- 0L
-            }
-            trigger_drift <- indef_bad_rho_count >= control$qn_fd_refresh_k
-            trigger_stall <- indef_iter_count >= control$qn_stuck_refresh_k
-            if (trigger_drift || trigger_stall) {
-              b_current <- fd_hess_from_grad(x_current)
-              gr_evals <- gr_evals + 2 * n
-              qn_fd_refreshes <- qn_fd_refreshes + 1L
-              indef_bad_rho_count <- 0L
-              indef_iter_count <- 0L
-              bad_rho_count <- 0L
-              pd_count <- 0L
-              skip_count <- 0L
-            }
+            indef_bad_rho_count <- indef_bad_rho_count + 1L
           } else {
             indef_bad_rho_count <- 0L
+          }
+          trigger_drift <- indef_bad_rho_count >= control$qn_fd_refresh_k
+          trigger_stall <- indef_iter_count >= control$qn_stuck_refresh_k
+          if (trigger_drift || trigger_stall) {
+            b_current <- fd_hess_from_grad(x_current)
+            gr_evals <- gr_evals + 2 * n
+            qn_fd_refreshes <- qn_fd_refreshes + 1L
+            indef_bad_rho_count <- 0L
             indef_iter_count <- 0L
-          }
-
-          if (update_result$restarted) {
-            qn_restarts <- qn_restarts + 1
-          }
-          if (update_result$skipped) {
-            qn_skips <- qn_skips + 1
-          } else {
-            qn_updates <- qn_updates + 1
-          }
-        } else if (control$qn_method == "sr1") {
-          update_result <- update_sr1(
-            b_current, s_vec, y_vec,
-            skip_tol = control$sr1_skip_tol,
-            skip_count = skip_count,
-            restart_threshold = control$sr1_restart_threshold
-          )
-          b_current <- update_result$b
-          skip_count <- update_result$skip_count
-
-          if (update_result$restarted) {
-            qn_restarts <- qn_restarts + 1
-          }
-          if (update_result$skipped) {
-            qn_skips <- qn_skips + 1
-          } else {
-            qn_updates <- qn_updates + 1
+            bad_rho_count <- 0L
+            pd_count <- 0L
+            skip_count <- 0L
           }
         } else {
-          # BFGS update
-          update_result <- update_bfgs(b_current, s_vec, y_vec)
-          b_current <- update_result$b
+          indef_bad_rho_count <- 0L
+          indef_iter_count <- 0L
+        }
 
-          if (update_result$skipped) {
-            qn_skips <- qn_skips + 1
-          } else {
-            qn_updates <- qn_updates + 1
-          }
+        if (update_result$restarted) {
+          qn_restarts <- qn_restarts + 1
+        }
+        if (update_result$skipped) {
+          qn_skips <- qn_skips + 1
+        } else {
+          qn_updates <- qn_updates + 1
+        }
+      } else if (control$qn_method == "sr1") {
+        update_result <- update_sr1(
+          b_current, s_vec, y_vec,
+          skip_tol = control$sr1_skip_tol,
+          skip_count = skip_count,
+          restart_threshold = control$sr1_restart_threshold
+        )
+        b_current <- update_result$b
+        skip_count <- update_result$skip_count
+
+        if (update_result$restarted) {
+          qn_restarts <- qn_restarts + 1
+        }
+        if (update_result$skipped) {
+          qn_skips <- qn_skips + 1
+        } else {
+          qn_updates <- qn_updates + 1
+        }
+      } else {
+        # BFGS update
+        update_result <- update_bfgs(b_current, s_vec, y_vec)
+        b_current <- update_result$b
+
+        if (update_result$skipped) {
+          qn_skips <- qn_skips + 1
+        } else {
+          qn_updates <- qn_updates + 1
         }
       }
 
@@ -643,11 +527,7 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
   }
 
   # Build final Hessian approximation for output
-  if (use_limited_memory) {
-    h_final <- NULL  # Cannot easily return full matrix
-  } else {
-    h_final <- b_current
-  }
+  h_final <- b_current
 
   list(
     par = x_current,
