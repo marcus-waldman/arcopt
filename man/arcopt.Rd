@@ -48,6 +48,12 @@ A list with components:
 \item \code{iterations}: Number of iterations performed
 \item \code{evaluations}: List with \code{fn}, \code{gr}, and \code{hess} evaluation counts
 \item \code{message}: Convergence message
+\item \code{solver_mode_final}: \code{"cubic"} or \code{"tr"} — which subproblem solver was
+active at termination
+\item \code{ridge_switches}: Integer count of cubic->TR switches (0 or 1 in v1,
+the switch is one-way)
+\item \code{radius_final}: Final trust-region radius (\code{NA} if the solver never
+switched to TR mode)
 }
 }
 \description{
@@ -99,6 +105,43 @@ When TRUE, routes to arcopt_qn which uses QN updates instead of exact
 Hessians. See \code{qn_method} for available QN methods.
 \item \code{qn_method}: QN update method - "sr1", "bfgs", "lbfgs", "lsr1"
 (default: "sr1"). Only used when \code{use_qn = TRUE}.
+}
+}
+
+\subsection{Trust-Region Fallback (Flat-Ridge Detector)}{
+
+Cubic regularization can stagnate in "flat-ridge" regimes — iterations
+with the regularization floor pinned, model predictions matching the
+objective (rho approx 1), gradient stalling, and a Hessian that is
+positive-definite but nearly singular. This behavior is outside the
+local-error-bound condition of Yue, Zhou & So (2018) under which
+cubic regularization is guaranteed to converge quadratically at
+degenerate minimizers. In those regimes, arcopt can switch (once) from
+the cubic subproblem to a trust-region subproblem, which places a hard
+step-norm constraint instead of a cubic penalty and is more effective
+at walking off near-singular ridges.
+\itemize{
+\item \code{tr_fallback_enabled}: Enable the one-way cubic->TR switch
+(default: \code{TRUE}).
+\item \code{tr_fallback_window}: Sliding-window length for the detector
+(default: \code{10}).
+\item \code{tr_fallback_tol_ridge}: \code{lambda_min} threshold defining a
+"near-singular PD" Hessian (default: \code{1e-3}).
+\item \code{tr_fallback_rho_tol}: Tolerance on \verb{|rho - 1|} for the
+"near-perfect model" signal (default: \code{0.1}).
+\item \code{tr_fallback_grad_decrease_max}: Ratio of latest to oldest
+\verb{||g||_inf} above which the gradient counts as stagnant
+(default: \code{0.9}).
+\item \code{tr_fallback_g_inf_floor}: Absolute lower bound on \verb{||g||_inf};
+the switch will not fire below this value so the hybrid does not
+trigger at true local minima (default: \code{1e-6}).
+\item \code{tr_rmax}: Maximum trust-region radius (default: \code{1e6}).
+\item \code{tr_eta1}: TR step-acceptance threshold (default: \code{0.25}).
+\item \code{tr_eta2}: TR expansion threshold (default: \code{0.75}).
+\item \code{tr_gamma_shrink}: Radius shrink factor on a poor step
+(default: \code{0.25}).
+\item \code{tr_gamma_grow}: Radius grow factor on a very good boundary step
+(default: \code{2.0}).
 }
 }
 }

@@ -293,3 +293,31 @@ The feature is done when:
 ---
 
 **End of briefing.** Reach out with any questions that weren't anticipated here; otherwise start with commit → branch → Phase 1.
+
+---
+
+## Appendix A — Yue, Zhou, So (2018) review (added 2026-04-23)
+
+Reference: *On the Quadratic Convergence of the Cubic Regularization Method under a Local Error Bound Condition*, SIAM J. Optim. 29(1):904–932.
+
+**What they prove.** Under a local error bound (EB) condition `dist(x, X) ≤ κ ||∇f(x)||` in a neighborhood of the second-order critical set `X` (their Definition 1 / Assumption 2), CR attains Q-quadratic convergence of iterates `{x^k}` to a second-order critical point — even when minimizers are *non-isolated* (degenerate). Their Theorem 1 establishes that EB is equivalent to quadratic growth `f(x) ≥ f(x̂) + (α/2) dist²(x, X)` under a mild separation-of-isocosts assumption.
+
+**What they don't cover.** The EB condition fails (or becomes vacuous with κ → ∞) when the landscape is flatter than quadratic-growth — e.g., a stretched ridge where gradient shrinks faster than distance to the true minimum. Yue-So's own example `f(x) = (||x||² − 1)²` satisfies EB (X is the unit sphere), because the gradient `4(||x||² − 1)x` is small only when close to X. A ridge with O(‖x‖⁴) decay along the ridge direction would violate EB: gradient vanishes along the ridge but distance to the global minimum does not.
+
+**Why this sharpens the hybrid contribution.**
+- Our DPM Heckman stall is in a regime **weaker than EB** (or equivalently, weaker than Łojasiewicz-1/2 / gradient-dominance, Yue-So Definition 4).
+- No published convergence result for CR/ARC covers this regime.
+- The four-signal detector (σ floor, ρ≈1, ‖g‖ stagnant, 0 < λ_min(H) < tol_ridge) is an **empirical proxy for EB violation**: when all four fire, the effective κ in `dist ≤ κ ||∇f||` would have to be very large (≥ 1/tol_ridge) — EB is practically vacuous.
+- The hybrid is therefore not a workaround for a theoretical gap that Yue-So plugged — it's a solution for landscapes beyond Yue-So's assumption.
+
+**Design confirmations.**
+1. The σ floor (`σ_min = 1e-6`) being pinned is equivalent to saying the cubic model trusts local quadratic structure — so EB-dominated convergence should already be in effect. If we're not converging despite that, we're outside EB.
+2. `tol_ridge = 1e-3` default is consistent: EB with κ ~ 10³ is practically useless as a convergence guarantee, so using λ_min(H) < 1e-3 as "ridge" is calibrated to where Yue-So's guarantee no longer has teeth.
+3. Gradient-stagnation check (‖g‖_k / ‖g‖_{k−W} > 0.9 over window W) directly tests local gradient-dominance violation.
+
+**Citations to add.**
+- Manuscript §Related Work / §Background: Yue-So (2018) as the strongest known CR convergence result for degenerate minima, and the paragraph explaining our ridge regime lies *outside* their assumption.
+- Detector description in §Algorithm: frame the four signals as EB-violation diagnostics.
+- Still open: whether EB is testable in practice (no — κ is not computable without knowing X). Our detector substitutes observable runtime signals.
+
+**No changes needed to briefing body** — the detector design is validated. Proceed to Phase 1.

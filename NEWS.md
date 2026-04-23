@@ -1,5 +1,62 @@
 # arcopt 0.1.1 (development)
 
+## Trust-region fallback for flat-ridge stagnation
+
+* `arcopt()` and `arcopt_qn()` now include a one-way cubic-to-trust-region
+  fallback that activates when the cubic-regularization subproblem stalls
+  in a near-singular positive-definite regime ("flat ridge"). The switch
+  fires when all four runtime signals hold for a sliding window: (i)
+  $\sigma_k$ pinned at its floor, (ii) $|\rho_k - 1|$ small (model is
+  accurate), (iii) $\|g_k\|_\infty$ stagnant across the window, and (iv)
+  the smallest Hessian eigenvalue strictly positive but below
+  `tr_fallback_tol_ridge`. The detector is an empirical proxy for
+  violation of the local-error-bound (EB) condition under which cubic
+  regularization is guaranteed to converge quadratically
+  (Yue, Zhou & So 2018); when all four fire, convergence theory for
+  pure cubic regularization has no teeth, and a trust-region step-norm
+  constraint is a principled alternative.
+
+* New control parameters (all tunable, sensible defaults):
+  - `tr_fallback_enabled` (default `TRUE`) — one-way cubic->TR switch.
+  - `tr_fallback_window` (default `10`), `tr_fallback_tol_ridge` (default
+    `1e-3`), `tr_fallback_rho_tol` (default `0.1`),
+    `tr_fallback_grad_decrease_max` (default `0.9`),
+    `tr_fallback_g_inf_floor` (default `1e-6`) — detector parameters.
+  - `tr_rmax` (default `1e6`), `tr_eta1` (default `0.25`),
+    `tr_eta2` (default `0.75`), `tr_gamma_shrink` (default `0.25`),
+    `tr_gamma_grow` (default `2.0`) — trust-region update parameters.
+
+* New return fields: `solver_mode_final` (`"cubic"` or `"tr"`),
+  `ridge_switches` (count of cubic->TR transitions, 0 or 1 in v1),
+  `radius_final` (final trust-region radius if the solver switched to
+  TR mode).
+
+* New internal functions: `solve_tr_eigen()` (trust-region subproblem
+  via eigendecomposition, mirrors `solve_cubic_eigen()`),
+  `init_flat_ridge_state()`, `update_flat_ridge_state()`,
+  `check_flat_ridge_trigger()` (detector state machine).
+
+* `solve_tr_eigen()` uses `stats::uniroot` on
+  $\phi(\lambda) = \|s(\lambda)\| - r$ for the easy-case secular
+  equation rather than plain Newton. Plain Newton was numerically
+  unstable on ill-conditioned indefinite Hessians (overshoots into
+  the lower-bound neighborhood where $\|s(\lambda)\|$ blows up);
+  `uniroot` is unconditionally stable given a valid bracket.
+
+* Signal 4 of the flat-ridge detector was broadened from
+  $0 < \lambda_{\min}(H) < \texttt{tol\_ridge}$ to
+  $\lambda_{\min}(H) < \texttt{tol\_ridge}$ — the detector now fires
+  on both the classical flat-ridge (small positive $\lambda_{\min}$)
+  and stuck-at-indefinite-saddle (negative $\lambda_{\min}$) regimes,
+  since cubic regularization loses its grip in both.
+
+* The $\sigma \leftrightarrow r$ duality between cubic regularization
+  and trust-region step bounds is formally established in
+  Dussault (2018; ARCq) and Martínez & Raydan (2017); this release's
+  adaptive switch between the two subproblem formulations appears to be
+  novel. See `todo/tr-fallback-hybrid-briefing.md` for design and
+  literature context.
+
 ## Quasi-Newton improvements
 
 * `arcopt_qn()` now seeds the initial Hessian approximation $B_0$ with

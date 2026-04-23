@@ -41,6 +41,12 @@ Same structure as arcopt, plus:
 \item \code{qn_restarts}: Number of approximation restarts
 \item \code{qn_fd_refreshes}: Number of FD Hessian refreshes performed (hybrid
 mode only; 0 for other qn_method values)
+\item \code{solver_mode_final}: \code{"cubic"} or \code{"tr"} — which subproblem solver
+was active at termination
+\item \code{ridge_switches}: Integer count of cubic->TR transitions (0 or 1 in
+v1, the switch is one-way)
+\item \code{radius_final}: Final trust-region radius (\code{NA} if the solver never
+switched to TR mode)
 }
 }
 \description{
@@ -107,6 +113,21 @@ consecutive bad rho steps rebuild B_k from a fresh FD Hessian
 this many iterations without promoting also triggers an FD refresh
 (safety net for secondary-saddle stalls)
 }
+}
+
+\subsection{Trust-Region Fallback}{
+
+All \verb{tr_fallback_*} and \verb{tr_*} control parameters from
+\code{\link{arcopt}} are respected. In QN mode the flat-ridge detector
+uses \code{lambda_min(B_k)} (the QN approximation's smallest eigenvalue)
+as the ridge signal, consistent with the quantity the cubic subproblem
+acts on. The ridge detector and the QN FD-refresh triggers are
+mutually exclusive: the FD refresh fires only in \code{"indefinite"}
+routing mode, while the ridge detector requires \code{lambda_min(B_k) > 0},
+so both cannot fire on the same iteration. If the one-way switch to
+trust-region mode occurs, subsequent iterations no longer update the
+\code{indefinite}-mode counters (since they are gated on being in cubic
+mode).
 }
 }
 \keyword{internal}
