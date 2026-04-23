@@ -124,8 +124,9 @@ flowchart TD
 | Algorithm | Name | Section | Purpose |
 |-----------|------|---------|---------|
 | 0 | Convergence Check | §3 | Stan-style multi-criteria termination |
-| 1 | Main ARC Loop | §4 | Orchestrates Newton-first + cubic fallback |
+| 1 | Main ARC Loop | §4 | Orchestrates Newton-first + cubic + optional TR fallback dispatch |
 | 1a | Newton Step | §4.2 | Gershgorin pre-check + Cholesky solve |
+| 1c | TR-Mode Iteration | §4.3 | Full TR step/accept/radius-update cycle (active after Alg 6c fires) |
 | 2a | CGT Update | §5.1 | Classical σ adaptation |
 | 2b | Interpolation Update | §5.2 | Lipschitz-enhanced σ adaptation |
 | 3 | ARCm | §6 | Momentum acceleration |
@@ -451,7 +452,7 @@ The main optimization loop attempts a Newton step first when conditions are favo
 
 *Cross-reference: See literature-review.qmd Section 1 (Introduction) for motivation of the cubic model, and Section 2 for regularization parameter adaptation strategies.*
 
-## Algorithm 1: ARC with Newton-First Strategy
+## Algorithm 1: ARC with Newton-First Strategy (and optional cubic→TR fallback)
 
 ```
 ALGORITHM 1: ARC with Newton-First Strategy
@@ -469,14 +470,28 @@ INPUT:
   max_iter_lambda  Cubic solver max iterations (e.g., 100)
   refresh       Print frequency (0 = silent, N = every N iterations)
   trace         Diagnostic level (0-3)
+  [Trust-region fallback controls — Algorithm 6c + 1c + 5c:]
+  tr_fallback_enabled     Enable cubic→TR one-way switch (default TRUE)
+  tr_fallback_window W    Detector window length (default 10)
+  tr_fallback_tol_ridge   λ_min threshold for "ill-conditioned" (default 1e-3)
+  tr_fallback_rho_tol     |ρ − 1| tolerance (default 0.1)
+  tr_fallback_grad_decrease_max  Gradient-stagnation ratio (default 0.9)
+  tr_fallback_g_inf_floor Absolute ||g||_∞ floor (default 1e-6)
+  tr_r0, tr_rmax          Initial / maximum TR radius (default 1, 100)
+  tr_eta1, tr_eta2        TR acceptance / expansion thresholds
+  tr_gamma_shrink, tr_gamma_grow   TR radius update factors
 
 OUTPUT:
-  x*            Approximate minimizer (or maximizer if fnscale = -1)
-  f*            Function value at x* (original scale)
-  g*            Gradient at x* (original scale)
-  H*            Hessian at x* (original scale)
-  converge_info Convergence status and reason
-  trace_data    Diagnostic history (if trace ≥ 1)
+  x*                Approximate minimizer (or maximizer if fnscale = -1)
+  f*                Function value at x* (original scale)
+  g*                Gradient at x* (original scale)
+  H*                Hessian at x* (original scale)
+  converge_info     Convergence status and reason
+  solver_mode_final Which subproblem solver was active at termination
+                    ∈ {"cubic", "tr"}
+  ridge_switches    Number of cubic→TR transitions (0 or 1 in v1)
+  radius_final      Final TR radius (NA if solver_mode_final == "cubic")
+  trace_data        Diagnostic history (if trace ≥ 1)
 
 PROCEDURE:
   [WRAPPER: Apply fnscale for maximization support]
@@ -493,6 +508,14 @@ PROCEDURE:
   prev_rejected ← FALSE              [track if previous step was rejected]
   prev_used_newton ← FALSE           [track if previous iteration used Newton]
   consecutive_negative_rho ← 0       [for monitoring theoretical guarantees]
+
+  [Trust-region fallback state — inactive by default, activates on
+   flat-ridge or stuck-indefinite-saddle detection; see Algorithm 6c]
+  solver_mode ← "cubic"
+  ridge_state ← init_flat_ridge_state(W = tr_fallback_window)
+  radius_current ← NA                [becomes meaningful once solver_mode = "tr"]
+  ridge_switches ← 0
+
   IF trace ≥ 1 THEN initialize_trace_storage() END IF
 
   WHILE NOT converged DO
@@ -527,7 +550,36 @@ PROCEDURE:
          already_refreshed ← TRUE
        END IF
 
-    3. ATTEMPT NEWTON STEP (skip if previously rejected):
+    3. SOLVER-MODE DISPATCH:
+       [Once the flat-ridge detector has fired (solver_mode = "tr"),
+        skip the Newton + cubic pipeline entirely and run a
+        trust-region iteration instead. The TR iteration is a full
+        step-compute/accept-reject/radius-update cycle; see
+        Algorithm 1c for detail.]
+       IF solver_mode = "tr" THEN
+         (s_k, ρ_k, accepted, r_new, on_boundary) ←
+           tr_mode_iteration(x_k, f_k, g_k, H_k, r_k = radius_current,
+                             control)    [Algorithm 1c]
+         step_type ← "tr"
+         IF accepted THEN
+           x_{k+1} ← x_k + s_k
+           [f_{k+1}, g_{k+1}, H_{k+1} are produced by Algorithm 1c]
+           prev_rejected ← FALSE
+         ELSE
+           x_{k+1} ← x_k
+           prev_rejected ← TRUE
+         END IF
+         radius_current ← r_new
+         [NOTE: σ is NOT updated in TR mode; r_k replaces its role.
+          The detector is also not re-evaluated in TR mode in v1 — the
+          switch is one-way.]
+         GOTO STEP 9    [proceed to diagnostics]
+       END IF
+
+    [solver_mode == "cubic": execute the Newton-first + cubic pipeline,
+     then update the flat-ridge detector at the end]
+
+    3a. ATTEMPT NEWTON STEP (skip if previously rejected):
        step_type ← "cubic"    [default]
        IF NOT prev_rejected THEN
          (newton_success, s_newton, pred_quad) ← try_newton_step(g_k, H_k)
@@ -606,6 +658,28 @@ PROCEDURE:
     8. UPDATE REGULARIZATION:
        σ_{k+1} ← update_sigma(σ_k, ρ_k, η_1, η_2, γ, σ_min, σ_max)
        [Algorithm 2a or 2b]
+
+    8b. UPDATE FLAT-RIDGE DETECTOR (cubic mode only):
+       [Observe the current iteration's runtime signals; fire a one-way
+        switch to TR mode if all four signals have held for W
+        consecutive iterations. See Algorithm 6c for signal details.]
+       IF tr_fallback_enabled AND is_finite(ρ_k) THEN
+         λ_min_k ← min_eigenvalue(H_k)
+         ridge_state ← update_flat_ridge_state(
+                         ridge_state,
+                         σ = σ_{k+1}, ρ = ρ_k,
+                         g_inf = ||g_k||_∞, λ_min = λ_min_k)
+         IF check_flat_ridge_trigger(ridge_state, σ_min, tol_ridge,
+                                     rho_tol, grad_decrease_max,
+                                     g_inf_floor) THEN
+           solver_mode ← "tr"
+           radius_current ← min(tr_r0, tr_rmax)
+           ridge_switches ← ridge_switches + 1
+           [NOTE: B_0 for TR is the current H_k; no extra hess() eval
+            at the switch. σ_{k+1} is retained in state but unused
+            once solver_mode = "tr".]
+         END IF
+       END IF
 
     9. DIAGNOSTICS AND MONITORING:
        iter_time ← clock() - iter_start_time
@@ -706,6 +780,132 @@ PROCEDURE:
 - Newton converges quadratically near solutions; ARC adds overhead when Newton works
 - Gershgorin check is O(n²) vs Cholesky's O(n³) — cheap to try first
 - Only attempt Newton with analytic or FD Hessians for accurate curvature information
+
+## Algorithm 1c: Trust-Region Mode Iteration
+
+Executed by the main loop (Algorithm 1, step 3) when `solver_mode = "tr"` —
+i.e., after the flat-ridge detector (Algorithm 6c) has fired and performed
+the one-way switch from cubic regularization to trust-region. Replaces the
+Newton-attempt (Algorithm 1a) + cubic-subproblem (Algorithm 5a) pipeline
+with a single trust-region subproblem solve (Algorithm 5c) followed by a
+step-acceptance test and radius update.
+
+```
+ALGORITHM 1c: Trust-Region Mode Iteration
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  x_k                  Current iterate
+  f_k                  Current function value
+  g_k                  Current gradient
+  H_k                  Current Hessian
+  r_k                  Current trust-region radius (> 0)
+  tr_eta1              Acceptance threshold (default 0.25)
+  tr_eta2              Expansion threshold (default 0.75)
+  tr_gamma_shrink      Radius shrink factor (default 0.25)
+  tr_gamma_grow        Radius grow factor (default 2.0)
+  tr_rmax              Maximum radius (default 100)
+  fn, gr, hess         Objective callbacks
+  lower, upper         Box bounds (optional)
+
+OUTPUT:
+  s_k          TR step (may be rejected)
+  ρ_k          Ratio of actual to predicted reduction
+  accepted     TRUE if step was accepted
+  r_{k+1}      Updated radius
+  on_boundary  TRUE if ‖s_k‖ == r_k (active constraint)
+
+PROCEDURE:
+  1. SOLVE TR SUBPROBLEM (Algorithm 5c):
+     (s_k, λ_k, pred_reduction, converged, case_type, on_boundary) ←
+       solve_tr_eigen(g_k, H_k, radius = r_k,
+                      tol_lambda, max_iter_lambda, hard_case_tol)
+
+  2. APPLY BOX CONSTRAINTS (same as cubic path):
+     (s_k, x_trial) ← apply_box_constraints(x_k, s_k, lower, upper)
+     [Algorithm 7a]
+
+  3. EVALUATE TRIAL POINT:
+     f_trial ← f(x_trial)
+     fn_evals ← fn_evals + 1
+
+     IF NOT is_finite(f_trial) THEN
+       [Non-finite trial — shrink radius and skip this iteration]
+       r_{k+1} ← max(r_k · tr_gamma_shrink, machine_epsilon)
+       RETURN (s_k, ρ_k = -∞, accepted = FALSE, r_{k+1}, on_boundary)
+     END IF
+
+  4. COMPUTE RATIO:
+     actual_reduction ← f_k − f_trial
+     IF |pred_reduction| < machine_epsilon THEN
+       [Guard against degenerate model]
+       ρ_k ← 1.0 IF actual_reduction ≥ 0 ELSE 0.0
+     ELSE
+       ρ_k ← actual_reduction / pred_reduction
+     END IF
+
+  5. ACCEPT OR REJECT:
+     IF is_finite(ρ_k) AND ρ_k ≥ tr_eta1 THEN
+       [Accept: evaluate new gradient and Hessian]
+       x_{k+1} ← x_trial
+       f_{k+1} ← f_trial
+       g_{k+1} ← ∇f(x_{k+1})
+       H_{k+1} ← ∇²f(x_{k+1})
+       gr_evals ← gr_evals + 1
+       hess_evals ← hess_evals + 1
+       accepted ← TRUE
+     ELSE
+       [Reject: keep current iterate, recycle gradient/Hessian]
+       x_{k+1} ← x_k
+       f_{k+1} ← f_k
+       g_{k+1} ← g_k
+       H_{k+1} ← H_k
+       accepted ← FALSE
+     END IF
+
+  6. UPDATE RADIUS:
+     IF NOT is_finite(ρ_k) OR ρ_k < tr_eta1 THEN
+       [Poor step: shrink]
+       r_{k+1} ← max(r_k · tr_gamma_shrink, machine_epsilon)
+     ELSE IF ρ_k ≥ tr_eta2 AND on_boundary THEN
+       [Very good step hitting the boundary: grow radius]
+       r_{k+1} ← min(r_k · tr_gamma_grow, tr_rmax)
+     ELSE
+       [Acceptable step in interior, or very good step not at boundary:
+        keep radius]
+       r_{k+1} ← r_k
+     END IF
+
+  RETURN (s_k, ρ_k, accepted, r_{k+1}, on_boundary)
+```
+
+### Comparison with cubic-mode iteration (Algorithm 1, steps 3a–8)
+
+Both modes share the same outer scaffolding (evaluate, check convergence
+and stagnation, box-constrain step, evaluate trial, accept by ρ test,
+diagnostics). The differences are localized:
+
+| Step | Cubic mode | TR mode |
+|------|-----------|---------|
+| Subproblem | Newton (Alg 1a) → cubic (Alg 5a) | Trust-region (Alg 5c) |
+| Regularization knob | σ_k via Alg 2a/2b | r_k via shrink/grow |
+| Predicted reduction | −g^T s − ½ s^T H s − (σ/3)‖s‖³ | −g^T s − ½ s^T H s |
+| Accept threshold | η_1 (default 0.1) | tr_eta1 (default 0.25) |
+| Expand condition | η_2 for σ reduction | tr_eta2 AND on_boundary for r growth |
+| Detector update | YES (Alg 6c can fire switch to TR) | NO (one-way switch in v1) |
+
+The mode dispatch in Algorithm 1 step 3 branches between these two
+pipelines based on the `solver_mode` state. On a run that never fires
+the detector, TR mode is never entered and the behavior is identical to
+the pre-hybrid algorithm.
+
+**Implementation status**: Fully implemented in the main loops of
+`arcopt()` and `arcopt_qn()` on branch `feature/tr-fallback-hybrid`
+(commit `a3fed60`). In `arcopt_qn()`, H_k is replaced by the QN
+approximation B_k (which is still maintained by SR1/BFGS/hybrid updates
+after each accepted TR step).
+
+---
 
 # Regularization Parameter Updates
 
