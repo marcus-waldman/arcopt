@@ -1,5 +1,62 @@
 # arcopt 0.1.1 (development)
 
+## QN-polish fallback for the strongly-convex basin
+
+* `arcopt()` now supports an opt-in bidirectional cubic <-> qn_polish
+  transition (`control$qn_polish_enabled`, default `FALSE`) that
+  replaces the cubic subproblem with a Wolfe line search along the
+  BFGS-approximated Newton direction once the iterate has entered the
+  quadratic attraction basin of a strict local minimum. At the switch,
+  the current exact Hessian $H_k$ warmstarts the BFGS approximation
+  $B_0$; subsequent iterations do not call `hess()` unless we revert.
+
+* Motivation: near a strict minimum where $\sigma$ has decayed to its
+  floor, the cubic penalty is numerically inactive yet arcopt keeps
+  evaluating `hess()`. For expensive Hessians (AD via Stan, FD) the
+  per-iteration cost dominates the polish phase. QN-polish skips
+  these evaluations and preserves Newton's local quadratic convergence
+  via the exact-H warm start plus BFGS's superlinear updates.
+
+* Healthy-basin detector fires when all five signals hold over a
+  sliding window (default width 5): Newton step accepted every
+  iteration, $\rho_k \ge 0.9$, $\lambda_{\min}(H_k) \ge 10^{-3}$ (strict
+  well-conditioned PD), superlinear gradient decay ($\|g_k\|_\infty /
+  \|g_{k-1}\|_\infty \le 0.5$), and $\|g_0\|_\infty$ above a
+  convergence floor ($10^{-8}$).
+
+* Bidirectional: if BFGS drifts non-PD (Cholesky fails), the search
+  direction is not descent, or the Wolfe line search fails on
+  `qn_polish_max_fail` consecutive iterations (default 3), the solver
+  reverts to cubic mode, recomputes $H(x_k)$, and enters a cooldown
+  period (`qn_polish_reenter_delay`, default 5 cubic iterations)
+  before qn_polish may re-fire. Prevents ping-ponging while letting
+  the detector catch the basin signal if cubic re-stabilizes.
+
+* New control parameters: `qn_polish_enabled`, `qn_polish_window`,
+  `qn_polish_rho`, `qn_polish_lambda_min`, `qn_polish_g_decay`,
+  `qn_polish_g_inf_floor`, `qn_polish_c1`, `qn_polish_c2`,
+  `qn_polish_alpha_max`, `qn_polish_max_ls_iter`, `qn_polish_max_fail`,
+  `qn_polish_reenter_delay`, `qn_polish_curv_eps`.
+
+* New return fields: `qn_polish_switches` (count of cubic->qn_polish
+  transitions), `qn_polish_reverts` (count of reversions),
+  `hess_evals_at_polish_switch` (Hessian-eval count at first switch;
+  difference with final `evaluations$hess` quantifies savings).
+  `solver_mode_final` now includes `"qn_polish"` as a possible value.
+
+* New internal functions: `wolfe_line_search()` (Nocedal & Wright
+  2006, Algorithms 3.5 + 3.6), `init_healthy_basin_state()`,
+  `update_healthy_basin_state()`, `check_healthy_basin_trigger()`.
+
+* Empirical: on a smooth non-quadratic convex problem
+  ($f(x) = \sum (0.5 x_i^2 + x_i^4/12)$, $n=5$, $x_0 = 10 \cdot \mathbf{1}$)
+  polish mode with default thresholds reduces Hessian evaluations from
+  9 to 6 (33%); with loose thresholds ($W=3$, $\rho_{\text{polish}}=0.3$)
+  from 9 to 4 (56%). On Rosenbrock the detector does not fire under
+  default settings because the banana-valley iterations produce
+  intermittent $\rho$ dips; Rosenbrock converges as before via the
+  cubic-only path.
+
 ## Trust-region fallback for flat-ridge stagnation
 
 * `arcopt()` and `arcopt_qn()` now include a one-way cubic-to-trust-region

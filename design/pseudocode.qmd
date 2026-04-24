@@ -124,9 +124,10 @@ flowchart TD
 | Algorithm | Name | Section | Purpose |
 |-----------|------|---------|---------|
 | 0 | Convergence Check | §3 | Stan-style multi-criteria termination |
-| 1 | Main ARC Loop | §4 | Orchestrates Newton-first + cubic + optional TR fallback dispatch |
+| 1 | Main ARC Loop | §4 | Orchestrates Newton-first + cubic + optional TR and QN-polish fallback dispatch |
 | 1a | Newton Step | §4.2 | Gershgorin pre-check + Cholesky solve |
 | 1c | TR-Mode Iteration | §4.3 | Full TR step/accept/radius-update cycle (active after Alg 6c fires) |
+| 1d | QN-Polish Iteration | §4.4 | Wolfe line search + BFGS update (active after Alg 6d fires) |
 | 2a | CGT Update | §5.1 | Classical σ adaptation |
 | 2b | Interpolation Update | §5.2 | Lipschitz-enhanced σ adaptation |
 | 3 | ARCm | §6 | Momentum acceleration |
@@ -136,9 +137,11 @@ flowchart TD
 | 5a | Eigendecomposition Solver | §8.1 | Cubic subproblem via spectral decomposition (n ≤ 500) |
 | 5b | Woodbury Solver | §8.2 | Low-rank QN cubic subproblem O(m²n) |
 | 5c | TR Eigendecomposition Solver | §8.1a | Trust-region subproblem (activates after ridge detector fires) |
+| 5d | Wolfe Line Search | §8.1b | Nocedal-Wright Alg 3.5+3.6; used in qn_polish mode |
 | 6a | Stagnation Recovery | §8.1 | Detect/recover from stagnation |
 | 6b | NaN/Inf Protection | §8.2 | Handle numerical failures |
 | 6c | Flat-Ridge Detector | §8.3 | Trigger cubic→TR switch on EB-violation proxy |
+| 6d | Healthy-Basin Detector | §8.4 | Trigger cubic→qn_polish switch on quadratic-basin entry |
 | 7a | Box Step Truncation | §9.1 | Apply bounds to step |
 | 7b | Initial Point Projection | §9.1 | Validate starting point |
 | 8a | Null Space Basis | §9.2 | Compute Z for linear equality |
@@ -550,12 +553,13 @@ PROCEDURE:
          already_refreshed ← TRUE
        END IF
 
-    3. SOLVER-MODE DISPATCH:
-       [Once the flat-ridge detector has fired (solver_mode = "tr"),
-        skip the Newton + cubic pipeline entirely and run a
-        trust-region iteration instead. The TR iteration is a full
-        step-compute/accept-reject/radius-update cycle; see
-        Algorithm 1c for detail.]
+    3. SOLVER-MODE DISPATCH (three-way):
+       [Once a non-cubic mode has fired, skip the Newton + cubic pipeline
+        entirely and run the corresponding specialized iteration. The
+        flat-ridge detector (Alg 6c) produces solver_mode = "tr"; the
+        healthy-basin detector (Alg 6d) produces solver_mode =
+        "qn_polish". Both use the same ρ / accept-reject machinery but
+        differ in their step-compute and parameter-update rules.]
        IF solver_mode = "tr" THEN
          (s_k, ρ_k, accepted, r_new, on_boundary) ←
            tr_mode_iteration(x_k, f_k, g_k, H_k, r_k = radius_current,
@@ -563,7 +567,6 @@ PROCEDURE:
          step_type ← "tr"
          IF accepted THEN
            x_{k+1} ← x_k + s_k
-           [f_{k+1}, g_{k+1}, H_{k+1} are produced by Algorithm 1c]
            prev_rejected ← FALSE
          ELSE
            x_{k+1} ← x_k
@@ -571,9 +574,35 @@ PROCEDURE:
          END IF
          radius_current ← r_new
          [NOTE: σ is NOT updated in TR mode; r_k replaces its role.
-          The detector is also not re-evaluated in TR mode in v1 — the
-          switch is one-way.]
-         GOTO STEP 9    [proceed to diagnostics]
+          One-way switch; detector is not re-evaluated in TR mode in v1.]
+         GOTO STEP 9
+       END IF
+
+       IF solver_mode = "qn_polish" THEN
+         (s_k, ρ_k, accepted, B_new, revert_signal) ←
+           qn_polish_iteration(x_k, f_k, g_k, B_k = b_current_polish,
+                               control)  [Algorithm 1d]
+         step_type ← "qn_polish"
+         IF revert_signal THEN
+           solver_mode ← "cubic"
+           H_k ← hess(x_k)                [recompute exact Hessian]
+           b_current_polish ← NULL
+           qn_polish_reverts ← qn_polish_reverts + 1
+           qn_polish_cooldown ← control$qn_polish_reenter_delay
+           GOTO STEP 1                    [retry iteration in cubic mode]
+         END IF
+         IF accepted THEN
+           x_{k+1} ← x_k + s_k
+           b_current_polish ← B_new
+           prev_rejected ← FALSE
+         ELSE
+           x_{k+1} ← x_k
+           prev_rejected ← TRUE
+         END IF
+         [NOTE: no hess() calls in qn_polish mode; this is the whole
+          point of the mode. Bidirectional switch back to cubic on
+          revert_signal, subject to cooldown on re-entry.]
+         GOTO STEP 9
        END IF
 
     [solver_mode == "cubic": execute the Newton-first + cubic pipeline,
@@ -904,6 +933,100 @@ the pre-hybrid algorithm.
 (commit `a3fed60`). In `arcopt_qn()`, H_k is replaced by the QN
 approximation B_k (which is still maintained by SR1/BFGS/hybrid updates
 after each accepted TR step).
+
+## Algorithm 1d: QN-Polish Mode Iteration
+
+Executed by the main loop (Algorithm 1, step 3) when `solver_mode = "qn_polish"` — i.e., after the healthy-basin detector (Algorithm 6d) has fired and performed the switch from cubic regularization to line-search BFGS. Replaces the Newton + cubic pipeline with a Wolfe line search (Algorithm 5d) along the BFGS-approximated Newton direction, followed by a BFGS update of the quadratic model. Unlike cubic and TR modes, this mode makes no calls to the user-supplied `hess()` function.
+
+```
+ALGORITHM 1d: QN-Polish Mode Iteration
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  x_k                    Current iterate
+  f_k, g_k               Current objective and gradient
+  B_k                    BFGS approximation (PD); B_0 = H_k at switch
+  fn, gr                 Objective and gradient callbacks
+  c1, c2                 Wolfe constants
+  alpha_max, max_ls_iter Line-search budget
+  curv_eps               Skip-update curvature threshold
+  lower, upper           Box bounds
+
+OUTPUT:
+  s_k           Accepted step (or zero on reject)
+  rho_k         Quadratic-model ratio, for diagnostics
+  accepted      TRUE if step accepted
+  B_new         Updated BFGS approximation
+  revert_signal TRUE if the caller should revert to cubic mode
+
+PROCEDURE:
+  1. COMPUTE DIRECTION via Cholesky:
+     R ← chol(B_k)
+     IF chol fails THEN RETURN revert_signal = TRUE
+     d ← solve(R' R, -g_k)                 [standard BFGS direction]
+
+     g_dot_d ← g_k' d
+     IF g_dot_d >= 0 THEN RETURN revert_signal = TRUE
+                           (direction isn't descent; numerical issue)
+
+  2. WOLFE LINE SEARCH (Algorithm 5d):
+     (success, alpha, x_new, f_new, g_new) ←
+       wolfe_line_search(fn, gr, x_k, d, f_k, g_k, c1, c2,
+                         alpha_max, max_ls_iter)
+
+     IF NOT success THEN
+       fail_count ← fail_count + 1
+       IF fail_count >= qn_polish_max_fail THEN
+         RETURN revert_signal = TRUE
+       ELSE
+         RETURN accepted = FALSE, reject step; B unchanged
+       END IF
+     END IF
+     fail_count ← 0
+
+  3. APPLY BOX CONSTRAINTS:
+     s_k ← alpha * d
+     (s_k, x_trial) ← apply_box_constraints(x_k, s_k, lower, upper)
+     [If box truncation changed the step, re-evaluate f, g at x_trial]
+
+  4. COMPUTE QUADRATIC-MODEL RATIO:
+     pred_reduction ← -g_k' s_k - 0.5 s_k' B_k s_k
+     actual_reduction ← f_k - f_new
+     rho_k ← actual_reduction / pred_reduction   (with guards on
+                                                  degenerate pred)
+
+  5. ACCEPT STEP + BFGS UPDATE:
+     x_{k+1} ← x_trial
+     f_{k+1} ← f_new
+     g_{k+1} ← g_new
+
+     s_vec ← s_k
+     y_vec ← g_{k+1} - g_k
+
+     IF y_vec' s_vec > curv_eps * ||s_vec|| * ||y_vec|| THEN
+       B_new ← BFGS_update(B_k, s_vec, y_vec)
+       [ B_new = B_k - (B_k s s' B_k) / (s' B_k s)
+                    + (y y') / (y' s)           ]
+     ELSE
+       B_new ← B_k           [skip update to preserve PD]
+     END IF
+
+  RETURN (s_k, rho_k, accepted = TRUE, B_new, revert_signal = FALSE)
+```
+
+### Comparison with cubic and TR modes
+
+| Step | Cubic | TR | QN-polish |
+|------|-------|----|----|
+| Subproblem | Newton (Alg 1a) + cubic (Alg 5a) | TR (Alg 5c) | Wolfe LS (Alg 5d) |
+| Hessian info | Exact H_k | Exact H_k | B_k (BFGS; B_0 = H at switch) |
+| `hess()` calls | Every accepted iter | Every accepted iter | None (until revert) |
+| Knob | σ (Alg 2a/2b) | r (shrink/grow) | α (line search) |
+| Accept thresh. | η_1 (default 0.1) | tr_eta1 (default 0.25) | Strong Wolfe conds |
+| Reject action | Increase σ; retry | Shrink r; retry | Count failure; after max_fail, revert |
+| Mode transition | → TR or → polish (Alg 6c/6d) | terminal (one-way) | ↔ cubic (bidirectional + cooldown) |
+
+**Implementation status**: Fully implemented in the main loop of `arcopt()` (`R/arcopt.R`). Not active by default (`qn_polish_enabled = FALSE` in v1); explicit opt-in required. `arcopt_qn()` does not support polish mode in v1 (it already avoids Hessian evaluations after startup via SR1/BFGS updates in cubic mode).
 
 ---
 
@@ -2075,6 +2198,78 @@ PROCEDURE:
 - Invoked in place of `solve_cubic_eigen()` once the flat-ridge detector (Algorithm 6c) fires
 - See todo/tr-fallback-hybrid-briefing.md for design context
 
+## Algorithm 5d: Wolfe Line Search
+
+Classical bracketing-then-zoom line search producing a step length that satisfies the strong Wolfe conditions. Used exclusively in qn_polish mode (Algorithm 1d) to accept steps along a BFGS-approximated Newton direction. Implementation follows Nocedal & Wright (2006, *Numerical Optimization*, 2e), Algorithms 3.5 (bracketing) and 3.6 (zoom).
+
+**When to use:** inside qn_polish mode after Algorithm 6d has fired. Not used by cubic or TR modes, which rely on ratio-test acceptance without line search.
+
+```
+ALGORITHM 5d: Wolfe Line Search
+─────────────────────────────────────────────────────────────────────
+
+INPUT:
+  fn, gr         Objective and gradient callbacks
+  x              Current iterate
+  d              Search direction (must satisfy g'd < 0)
+  f_x, g_x       Objective value and gradient at x
+  c1             Armijo constant (default 1e-4)
+  c2             Curvature constant (default 0.9)
+  alpha_max      Maximum initial step (default 1)
+  max_iter       Total fn/gr evaluations budget (default 20)
+
+OUTPUT:
+  success        TRUE if strong Wolfe was satisfied
+  alpha          Accepted step length
+  x_new, f_new, g_new   Trial point and its values
+  reason         Diagnostic string
+
+PROCEDURE (Alg 3.5 - Bracketing):
+  Define phi(alpha) = f(x + alpha * d),  phi_prime(alpha) = g(x + alpha * d)' d
+  phi_0     = f_x
+  phi'_0    = g_x' d            [must be < 0; else return not_descent]
+
+  alpha_prev = 0
+  alpha_curr = alpha_max
+  FOR iter = 1 .. max_iter:
+    Evaluate phi(alpha_curr) and phi_prime(alpha_curr)
+
+    IF phi(alpha_curr) > phi_0 + c1 alpha_curr phi'_0
+       OR (iter > 1 AND phi(alpha_curr) >= phi(alpha_prev)):
+      RETURN zoom(alpha_prev, alpha_curr)
+
+    IF |phi_prime(alpha_curr)| <= -c2 phi'_0:
+      RETURN success at alpha_curr
+
+    IF phi_prime(alpha_curr) >= 0:
+      RETURN zoom(alpha_curr, alpha_prev)     [bracket flipped order]
+
+    alpha_prev = alpha_curr
+    alpha_curr = min(2 * alpha_curr, 10 * alpha_max)    [extend]
+  END FOR
+  RETURN failure (bracket_max_iter)
+
+PROCEDURE zoom(alpha_lo, alpha_hi):  (Alg 3.6)
+  WHILE budget remains:
+    alpha = (alpha_lo + alpha_hi) / 2      [bisection]
+    Evaluate phi(alpha), phi_prime(alpha)
+
+    IF phi(alpha) > phi_0 + c1 alpha phi'_0 OR phi(alpha) >= phi(alpha_lo):
+      alpha_hi = alpha
+    ELSE IF |phi_prime(alpha)| <= -c2 phi'_0:
+      RETURN success at alpha
+    ELSE:
+      IF phi_prime(alpha) * (alpha_hi - alpha_lo) >= 0: alpha_hi = alpha_lo
+      alpha_lo = alpha
+  END WHILE
+  RETURN failure (zoom_max_iter)
+```
+
+**Implementation Status:**
+- ✅ Fully implemented in `wolfe_line_search()` (R/line_search.R)
+- Bisection used in zoom (simpler than quadratic/cubic interpolation;
+  the briefing notes interpolation as a future refinement)
+
 ## Algorithm 6c: Flat-Ridge Detector
 
 Emits a one-way switch from cubic to trust-region subproblem when four runtime signals jointly indicate that the cubic penalty is no longer providing useful damping and the iterate is stalled on a near-singular positive-definite ridge.
@@ -2129,6 +2324,57 @@ PROCEDURE (evaluate at each iteration; trigger if returns TRUE):
 - ✅ Fully implemented in `init_flat_ridge_state()`, `update_flat_ridge_state()`, `check_flat_ridge_trigger()` (R/flat_ridge.R)
 - Invoked at the end of each cubic-mode iteration in `arcopt()` and `arcopt_qn()`
 - In QN mode, `lambda_min` uses the QN approximation B_k (not the true H); mutually exclusive with the QN FD-refresh triggers (which fire only in `"indefinite"` routing mode)
+
+## Algorithm 6d: Healthy-Basin Detector
+
+Emits a bidirectional switch from cubic to qn_polish mode when five runtime signals jointly indicate that the iterate has entered the quadratic attraction basin of a strict local minimum. In contrast to the flat-ridge detector (Alg 6c), which watches for stagnation, this detector watches for *healthy convergence*.
+
+**Rationale**: near a strict local minimizer where $\nabla^2 f(x^*) \succ 0$ and $\nabla^2 f$ is Lipschitz, Newton's method converges quadratically. In this regime the cubic penalty $(\sigma/3)\|s\|^3$ has decayed to its floor and contributes negligible damping, yet arcopt still evaluates the user's `hess()` every iteration. qn_polish replaces those with BFGS updates + Wolfe line search, preserving Newton's local quadratic rate while avoiding Hessian recomputation.
+
+```
+ALGORITHM 6d: Healthy-Basin Detector
+─────────────────────────────────────────────────────────────────────
+
+STATE (sliding window of length W, default 5):
+  used_newton[1..W]    TRUE iff step_type == "newton" at that iter
+  rho[1..W]            rho values
+  lambda_min[1..W]     smallest Hessian eigenvalues
+  g_inf[1..W]          ||g||_inf values
+
+CONTROL:
+  rho_polish               minimum rho (default 0.9)
+  lambda_min_polish        minimum lambda_min(H) (default 1e-3;
+                           strictly PD and well-conditioned)
+  g_decay_polish           maximum ratio g_inf[i] / g_inf[i-1] (default 0.5)
+  g_inf_floor_polish       floor on oldest g_inf in window (default 1e-8;
+                           prevents firing at convergence)
+
+PROCEDURE (evaluate at each cubic-mode iteration; trigger if returns TRUE):
+  IF window not full THEN RETURN FALSE
+
+  oldest_g = g_inf[1]
+  IF oldest_g <= g_inf_floor_polish THEN RETURN FALSE    (already converged)
+
+  # Signal 1: Newton step accepted throughout window
+  IF any used_newton[i] is FALSE THEN RETURN FALSE
+
+  # Signal 2: high rho throughout
+  IF any rho[i] < rho_polish THEN RETURN FALSE
+
+  # Signal 3: Hessian well-conditioned PD throughout
+  IF any lambda_min[i] < lambda_min_polish THEN RETURN FALSE
+
+  # Signal 4: superlinear gradient decay on EVERY consecutive pair
+  IF any g_inf[i+1] / g_inf[i] > g_decay_polish THEN RETURN FALSE
+
+  RETURN TRUE
+```
+
+**Implementation Status:**
+- ✅ Fully implemented in `init_healthy_basin_state()`, `update_healthy_basin_state()`, `check_healthy_basin_trigger()` (R/healthy_basin.R)
+- Invoked at the end of each cubic-mode iteration in `arcopt()` alongside the flat-ridge detector
+- NOT used in `arcopt_qn()` (which already skips `hess()` after startup; v1 scope)
+- Bidirectional: reverting from qn_polish to cubic does not reset the window — the detector may re-fire immediately unless a per-revert cooldown (`qn_polish_reenter_delay`, default 5 iterations) is in effect
 
 ## Algorithm 5b: Woodbury-Based Cubic Solver (Low-Rank QN)
 
