@@ -48,12 +48,18 @@ A list with components:
 \item \code{iterations}: Number of iterations performed
 \item \code{evaluations}: List with \code{fn}, \code{gr}, and \code{hess} evaluation counts
 \item \code{message}: Convergence message
-\item \code{solver_mode_final}: \code{"cubic"} or \code{"tr"} — which subproblem solver was
-active at termination
+\item \code{solver_mode_final}: \code{"cubic"}, \code{"tr"}, or \code{"qn_polish"} — which
+subproblem solver was active at termination
 \item \code{ridge_switches}: Integer count of cubic->TR switches (0 or 1 in v1,
 the switch is one-way)
 \item \code{radius_final}: Final trust-region radius (\code{NA} if the solver never
 switched to TR mode)
+\item \code{qn_polish_switches}: Integer count of cubic->qn_polish transitions
+(bidirectional; may be > 1 if the solver reverts and re-fires)
+\item \code{qn_polish_reverts}: Integer count of qn_polish->cubic reversions
+\item \code{hess_evals_at_polish_switch}: Value of \code{evaluations$hess} at the
+first qn_polish switch; users can compare against the final
+\code{evaluations$hess} to quantify Hessian-evaluation savings
 }
 }
 \description{
@@ -142,6 +148,49 @@ trigger at true local minima (default: \code{1e-6}).
 (default: \code{0.25}).
 \item \code{tr_gamma_grow}: Radius grow factor on a very good boundary step
 (default: \code{2.0}).
+}
+}
+
+\subsection{QN-Polish Fallback (Healthy-Basin Detector)}{
+
+Once the iterate has entered the quadratic attraction basin of a strict
+local minimum, the cubic regularization penalty has decayed to its floor
+and contributes negligible damping, but arcopt still evaluates the
+user-supplied \code{hess()} at every iteration. For expensive Hessians (AD
+via Stan, finite-difference), this per-iteration cost dominates
+wall-clock time in the polish phase. The \code{qn_polish} mode replaces
+the cubic subproblem with a Wolfe line search along the BFGS-approximated
+Newton direction, skipping further \code{hess()} calls until convergence.
+The switch is bidirectional: if the BFGS approximation drifts or the
+line search fails repeatedly, arcopt reverts to cubic mode with a
+cooldown to prevent ping-ponging.
+\itemize{
+\item \code{qn_polish_enabled}: Enable the cubic <-> qn_polish bidirectional
+switch (default: \code{FALSE} in v1; will be flipped after broader
+benchmark evidence).
+\item \code{qn_polish_window}: Sliding-window length for the healthy-basin
+detector (default: \code{5}; shorter than the TR-fallback window because
+the basin signal is stronger).
+\item \code{qn_polish_rho}: Minimum \code{rho_k} required throughout the window
+(default: \code{0.9}).
+\item \code{qn_polish_lambda_min}: Minimum \code{lambda_min(H_k)} required (strictly
+positive, not just PD) throughout the window (default: \code{1e-3}).
+\item \code{qn_polish_g_decay}: Maximum ratio of consecutive \verb{||g||_inf} values;
+e.g., \code{0.5} requires 2x-per-iteration contraction (default: \code{0.5}).
+\item \code{qn_polish_g_inf_floor}: Absolute lower bound on \verb{||g||_inf} at
+window start; prevents firing at convergence (default: \code{1e-8}).
+\item \code{qn_polish_c1}, \code{qn_polish_c2}: Wolfe line-search constants
+(defaults \code{1e-4} and \code{0.9}).
+\item \code{qn_polish_alpha_max}: Initial step length tried by the line search
+(default: \code{1.0}, matching the BFGS convention).
+\item \code{qn_polish_max_ls_iter}: Maximum line-search evaluations per
+iteration (default: \code{20}).
+\item \code{qn_polish_max_fail}: Consecutive line-search failures that trigger
+a revert to cubic mode (default: \code{3}).
+\item \code{qn_polish_reenter_delay}: Cubic iterations required after a revert
+before qn_polish may re-fire (default: \code{5}).
+\item \code{qn_polish_curv_eps}: Curvature threshold for skipping BFGS updates
+to preserve PD of the approximation (default: \code{1e-10}).
 }
 }
 }

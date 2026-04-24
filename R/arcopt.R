@@ -95,6 +95,47 @@
 #' * `tr_gamma_grow`: Radius grow factor on a very good boundary step
 #'   (default: `2.0`).
 #'
+#' ## QN-Polish Fallback (Healthy-Basin Detector)
+#'
+#' Once the iterate has entered the quadratic attraction basin of a strict
+#' local minimum, the cubic regularization penalty has decayed to its floor
+#' and contributes negligible damping, but arcopt still evaluates the
+#' user-supplied `hess()` at every iteration. For expensive Hessians (AD
+#' via Stan, finite-difference), this per-iteration cost dominates
+#' wall-clock time in the polish phase. The `qn_polish` mode replaces
+#' the cubic subproblem with a Wolfe line search along the BFGS-approximated
+#' Newton direction, skipping further `hess()` calls until convergence.
+#' The switch is bidirectional: if the BFGS approximation drifts or the
+#' line search fails repeatedly, arcopt reverts to cubic mode with a
+#' cooldown to prevent ping-ponging.
+#'
+#' * `qn_polish_enabled`: Enable the cubic <-> qn_polish bidirectional
+#'   switch (default: `FALSE` in v1; will be flipped after broader
+#'   benchmark evidence).
+#' * `qn_polish_window`: Sliding-window length for the healthy-basin
+#'   detector (default: `5`; shorter than the TR-fallback window because
+#'   the basin signal is stronger).
+#' * `qn_polish_rho`: Minimum `rho_k` required throughout the window
+#'   (default: `0.9`).
+#' * `qn_polish_lambda_min`: Minimum `lambda_min(H_k)` required (strictly
+#'   positive, not just PD) throughout the window (default: `1e-3`).
+#' * `qn_polish_g_decay`: Maximum ratio of consecutive `||g||_inf` values;
+#'   e.g., `0.5` requires 2x-per-iteration contraction (default: `0.5`).
+#' * `qn_polish_g_inf_floor`: Absolute lower bound on `||g||_inf` at
+#'   window start; prevents firing at convergence (default: `1e-8`).
+#' * `qn_polish_c1`, `qn_polish_c2`: Wolfe line-search constants
+#'   (defaults `1e-4` and `0.9`).
+#' * `qn_polish_alpha_max`: Initial step length tried by the line search
+#'   (default: `1.0`, matching the BFGS convention).
+#' * `qn_polish_max_ls_iter`: Maximum line-search evaluations per
+#'   iteration (default: `20`).
+#' * `qn_polish_max_fail`: Consecutive line-search failures that trigger
+#'   a revert to cubic mode (default: `3`).
+#' * `qn_polish_reenter_delay`: Cubic iterations required after a revert
+#'   before qn_polish may re-fire (default: `5`).
+#' * `qn_polish_curv_eps`: Curvature threshold for skipping BFGS updates
+#'   to preserve PD of the approximation (default: `1e-10`).
+#'
 #' @return A list with components:
 #' * `par`: Optimal parameter vector
 #' * `value`: Optimal function value
@@ -104,12 +145,18 @@
 #' * `iterations`: Number of iterations performed
 #' * `evaluations`: List with `fn`, `gr`, and `hess` evaluation counts
 #' * `message`: Convergence message
-#' * `solver_mode_final`: `"cubic"` or `"tr"` — which subproblem solver was
-#'   active at termination
+#' * `solver_mode_final`: `"cubic"`, `"tr"`, or `"qn_polish"` — which
+#'   subproblem solver was active at termination
 #' * `ridge_switches`: Integer count of cubic->TR switches (0 or 1 in v1,
 #'   the switch is one-way)
 #' * `radius_final`: Final trust-region radius (`NA` if the solver never
 #'   switched to TR mode)
+#' * `qn_polish_switches`: Integer count of cubic->qn_polish transitions
+#'   (bidirectional; may be > 1 if the solver reverts and re-fires)
+#' * `qn_polish_reverts`: Integer count of qn_polish->cubic reversions
+#' * `hess_evals_at_polish_switch`: Value of `evaluations$hess` at the
+#'   first qn_polish switch; users can compare against the final
+#'   `evaluations$hess` to quantify Hessian-evaluation savings
 #'
 #' @importFrom utils modifyList
 #' @export
@@ -205,6 +252,22 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
     tr_eta2 = 0.75,
     tr_gamma_shrink = 0.25,
     tr_gamma_grow = 2.0,
+    # QN-polish fallback (cubic -> line-search BFGS once we enter the
+    # quadratic attraction basin). Avoids Hessian recomputation in the
+    # final convergence phase.
+    qn_polish_enabled = FALSE,
+    qn_polish_window = 5,
+    qn_polish_rho = 0.9,
+    qn_polish_lambda_min = 1e-3,
+    qn_polish_g_decay = 0.5,
+    qn_polish_g_inf_floor = 1e-8,
+    qn_polish_c1 = 1e-4,
+    qn_polish_c2 = 0.9,
+    qn_polish_alpha_max = 1.0,
+    qn_polish_max_ls_iter = 20,
+    qn_polish_max_fail = 3,
+    qn_polish_reenter_delay = 5,
+    qn_polish_curv_eps = 1e-10,
     trace = 1
   )
 
@@ -237,6 +300,15 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
   radius_current <- NA_real_
   ridge_switches <- 0L
   s_current <- NULL # last step; used to seed TR radius at switch
+
+  # QN-polish state (bidirectional cubic <-> qn_polish with cooldown)
+  basin_state <- init_healthy_basin_state(window = control$qn_polish_window)
+  b_current_polish <- NULL # BFGS approximation; non-NULL iff in qn_polish mode
+  qn_polish_switches <- 0L
+  qn_polish_reverts <- 0L
+  qn_polish_fail_count <- 0L
+  qn_polish_cooldown <- 0L
+  hess_evals_at_polish_switch <- NA_integer_
 
   # Initial evaluation
   f_current <- fn(x_current, ...)
@@ -403,6 +475,137 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
         } else if (rho >= control$tr_eta2 && on_boundary) {
           radius_current <- min(radius_current * control$tr_gamma_grow,
                                 control$tr_rmax)
+        }
+      }
+    }
+
+    if (solver_mode == "qn_polish") {
+      # --- QN-polish branch: line-search BFGS with warmstarted B_0 = H
+      # (at switch). No further hess() evaluations unless we revert. ---
+      step_type <- "qn_polish"
+      used_newton <- FALSE
+
+      # 1. Compute direction d = -B^{-1} g via Cholesky.
+      chol_B <- tryCatch(chol(b_current_polish), error = function(e) NULL)
+      if (is.null(chol_B)) {
+        # B drifted non-PD; revert to cubic
+        solver_mode <- "cubic"
+        h_current <- hess(x_current, ...)
+        hess_evals <- hess_evals + 1
+        qn_polish_reverts <- qn_polish_reverts + 1L
+        b_current_polish <- NULL
+        qn_polish_fail_count <- 0L
+        qn_polish_cooldown <- control$qn_polish_reenter_delay
+      } else {
+        d_polish <- as.vector(backsolve(
+          chol_B, backsolve(chol_B, -g_current, transpose = TRUE)
+        ))
+
+        # Descent-direction sanity check (should hold with PD B)
+        g_dot_d <- sum(g_current * d_polish)
+        if (!is.finite(g_dot_d) || g_dot_d >= 0) {
+          solver_mode <- "cubic"
+          h_current <- hess(x_current, ...)
+          hess_evals <- hess_evals + 1
+          qn_polish_reverts <- qn_polish_reverts + 1L
+          b_current_polish <- NULL
+          qn_polish_fail_count <- 0L
+          qn_polish_cooldown <- control$qn_polish_reenter_delay
+        } else {
+          # 2. Wolfe line search along d
+          ls <- wolfe_line_search(
+            fn = fn, gr = gr,
+            x = x_current, d = d_polish,
+            f_x = f_current, g_x = g_current,
+            c1 = control$qn_polish_c1,
+            c2 = control$qn_polish_c2,
+            alpha_max = control$qn_polish_alpha_max,
+            max_iter = control$qn_polish_max_ls_iter,
+            ...
+          )
+          fn_evals <- fn_evals + ls$evals_f
+          gr_evals <- gr_evals + ls$evals_g
+
+          if (!ls$success) {
+            # Line search failed; count, maybe revert
+            qn_polish_fail_count <- qn_polish_fail_count + 1L
+            if (qn_polish_fail_count >= control$qn_polish_max_fail) {
+              solver_mode <- "cubic"
+              h_current <- hess(x_current, ...)
+              hess_evals <- hess_evals + 1
+              qn_polish_reverts <- qn_polish_reverts + 1L
+              b_current_polish <- NULL
+              qn_polish_fail_count <- 0L
+              qn_polish_cooldown <- control$qn_polish_reenter_delay
+            }
+            # rho meaningless on LS failure; use NaN for trace
+            rho <- NaN
+            pred_reduction <- 0
+          } else {
+            # Line search succeeded — accept step
+            qn_polish_fail_count <- 0L
+            s_polish <- ls$alpha * d_polish
+
+            # Apply box constraints (same convention as cubic path)
+            box_result <- apply_box_constraints(x_current, s_polish,
+                                                lower, upper)
+            s_polish <- box_result$s_bounded
+            x_trial <- box_result$x_new
+
+            # If box truncation changed the step substantially, re-eval
+            if (max(abs(x_trial - ls$x_new)) > .Machine$double.eps) {
+              f_trial <- fn(x_trial, ...)
+              fn_evals <- fn_evals + 1
+              if (check_finite(f_trial, rep(0, length(x_trial)))) {
+                g_trial <- gr(x_trial, ...)
+                gr_evals <- gr_evals + 1
+              } else {
+                g_trial <- ls$g_new
+                f_trial <- ls$f_new
+              }
+            } else {
+              f_trial <- ls$f_new
+              g_trial <- ls$g_new
+            }
+
+            # Track rho for trace and detector (quadratic model vs actual)
+            actual_reduction <- f_current - f_trial
+            h_s <- as.vector(b_current_polish %*% s_polish)
+            pred_reduction <- -sum(g_current * s_polish) -
+              0.5 * sum(s_polish * h_s)
+            rho <- if (abs(pred_reduction) < .Machine$double.eps) {
+              if (actual_reduction >= 0) 1.0 else 0.0
+            } else {
+              actual_reduction / pred_reduction
+            }
+
+            # Promote trial to current
+            g_previous <- g_current
+            x_previous <- x_current
+            f_previous <- f_current
+            x_current <- x_trial
+            f_current <- f_trial
+            g_current <- g_trial
+            s_current <- s_polish
+            if (!check_finite(f_current, g_current)) {
+              stop("NaN/Inf in gradient at accepted qn_polish step")
+            }
+
+            # BFGS update: skip if curvature condition fails
+            y_vec <- g_current - g_previous
+            s_dot_y <- sum(s_polish * y_vec)
+            curv_bound <- control$qn_polish_curv_eps *
+              sqrt(sum(s_polish^2) * sum(y_vec^2))
+            if (is.finite(s_dot_y) && s_dot_y > curv_bound) {
+              update_result <- update_bfgs(b_current_polish,
+                                           s_polish, y_vec)
+              b_current_polish <- update_result$b
+            }
+            # else: skip update, preserves PD of B
+
+            step_norms <- c(step_norms, sqrt(sum(s_polish^2)))
+            f_values <- c(f_values, f_current)
+          }
         }
       }
     }
@@ -657,17 +860,27 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
       )
     }
 
-    # Update flat-ridge detector; switch to TR mode if all four signals fire
-    if (control$tr_fallback_enabled && is.finite(rho)) {
+    # Update both end-of-cubic-iteration detectors. Compute lambda_min
+    # once and share between them to avoid a redundant eigendecomp.
+    if (is.finite(rho) &&
+          (control$tr_fallback_enabled || control$qn_polish_enabled)) {
       lambda_min_current <- tryCatch(
         min(eigen(h_current, symmetric = TRUE, only.values = TRUE)$values),
         error = function(e) NA_real_
       )
+      g_inf_current <- max(abs(g_current))
+    } else {
+      lambda_min_current <- NA_real_
+      g_inf_current <- NA_real_
+    }
+
+    # Flat-ridge detector: switch to TR mode if all four signals fire
+    if (control$tr_fallback_enabled && is.finite(rho)) {
       ridge_state <- update_flat_ridge_state(
         ridge_state,
         sigma = sigma_current,
         rho = rho,
-        g_inf = max(abs(g_current)),
+        g_inf = g_inf_current,
         lambda_min = lambda_min_current
       )
       if (check_flat_ridge_trigger(
@@ -686,6 +899,33 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
         # or shrinks the radius adaptively based on the subsequent rhos.
         radius_current <- min(control$tr_r0, control$tr_rmax)
         ridge_switches <- ridge_switches + 1L
+      }
+    }
+
+    # Healthy-basin detector: switch to qn_polish mode if all five signals
+    # fire and we're not in cooldown after a recent revert.
+    if (control$qn_polish_enabled && is.finite(rho) &&
+          solver_mode == "cubic") {
+      basin_state <- update_healthy_basin_state(
+        basin_state,
+        used_newton = used_newton,
+        rho = rho,
+        lambda_min = lambda_min_current,
+        g_inf = g_inf_current
+      )
+      if (qn_polish_cooldown > 0L) {
+        qn_polish_cooldown <- qn_polish_cooldown - 1L
+      } else if (check_healthy_basin_trigger(
+        basin_state,
+        rho_polish = control$qn_polish_rho,
+        lambda_min_polish = control$qn_polish_lambda_min,
+        g_decay_polish = control$qn_polish_g_decay,
+        g_inf_floor_polish = control$qn_polish_g_inf_floor
+      )) {
+        solver_mode <- "qn_polish"
+        b_current_polish <- h_current # warmstart B_0 = current Hessian
+        qn_polish_switches <- qn_polish_switches + 1L
+        hess_evals_at_polish_switch <- hess_evals
       }
     }
     } # end if (solver_mode == "cubic")
@@ -797,7 +1037,7 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
     par = x_current,
     value = f_current,
     gradient = g_current,
-    hessian = h_current,
+    hessian = if (solver_mode == "qn_polish") b_current_polish else h_current,
     sigma = sigma_current,
     converged = converged,
     iterations = iter,
@@ -805,7 +1045,10 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
     message = conv_reason,
     solver_mode_final = solver_mode,
     ridge_switches = ridge_switches,
-    radius_final = radius_current
+    radius_final = radius_current,
+    qn_polish_switches = qn_polish_switches,
+    qn_polish_reverts = qn_polish_reverts,
+    hess_evals_at_polish_switch = hess_evals_at_polish_switch
   )
 
   # Add trace data if collected
