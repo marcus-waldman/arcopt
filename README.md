@@ -134,22 +134,62 @@ m(s) = f + g's + (1/2) s'Hs + (σ/3)||s||³
 
 This cubic term prevents unbounded steps when the Hessian has negative eigenvalues.
 
+## Adaptive Solver-Mode Dispatch
+
+`arcopt()` automatically adapts its subproblem solver to the local
+landscape:
+
+1. **Cubic** (default). Uses adaptive cubic regularization with a
+   Newton-first fast path. Handles saddles and indefinite Hessians
+   naturally.
+2. **Trust-region** (enabled by default). Fires a one-way switch from
+   cubic when four runtime signals indicate flat-ridge or
+   stuck-indefinite-saddle stagnation. Replaces the cubic penalty
+   with a hard step-norm constraint so the step can walk off a
+   near-singular ridge.
+3. **QN-polish** (opt-in). Fires a bidirectional switch from cubic
+   when the iterate enters the quadratic attraction basin of a strict
+   minimum. Replaces the cubic subproblem with Wolfe line-search BFGS
+   warmstarted from the current exact Hessian; skips further `hess()`
+   calls until convergence or revert, saving wall-clock time on
+   expensive Hessians (Stan AD, finite differences).
+
+```r
+result <- arcopt(x0, fn, gr, hess, control = list(
+  tr_fallback_enabled = TRUE,    # cubic->TR on flat-ridge (default)
+  qn_polish_enabled = TRUE       # cubic<->BFGS polish in basin (opt-in)
+))
+
+result$solver_mode_final   # "cubic", "tr", or "qn_polish"
+result$ridge_switches      # count of cubic->TR transitions
+result$qn_polish_switches  # count of cubic->polish transitions
+result$qn_polish_reverts   # count of polish->cubic reversions
+```
+
+See `design/design-principles.qmd` §3a for the σ↔r duality framing
+and `todo/tr-fallback-hybrid-briefing.md` / `todo/qn-polish-mode-briefing.md`
+for the detector designs.
+
 ## Common Options
 
 ```r
 arcopt(x0, fn, gr, hess,
   control = list(
-    # Quasi-Newton mode (no Hessian needed)
+    # Quasi-Newton mode (no exact Hessian needed)
     use_qn = TRUE,
     qn_method = "hybrid",    # recommended for saddle-prone problems;
-                             # also "bfgs", "sr1", "lbfgs", "lsr1", "lhybrid"
+                             # also "bfgs", "sr1"
 
     # Convergence tolerances
     gtol_abs = 1e-5,         # Gradient norm
     maxit = 1000,            # Max iterations
 
-    # Momentum (enabled by default, helps ill-conditioned problems)
-    use_momentum = TRUE,
+    # Hybrid solver-mode dispatch
+    tr_fallback_enabled = TRUE,   # cubic->TR on stagnation
+    qn_polish_enabled   = FALSE,  # cubic<->polish in quadratic basin
+
+    # Momentum (helps ill-conditioned nonconvex problems)
+    use_momentum = FALSE,
 
     # Diagnostics
     trace = 1                # Print progress
@@ -183,14 +223,23 @@ arcopt(x0, fn, gr, hess,
 ```r
 result <- arcopt(x0, fn, gr, hess)
 
-result$par          # Optimal parameters
-result$value        # Optimal function value
-result$gradient     # Gradient at solution
-result$hessian      # Hessian at solution (if provided)
-result$converged    # TRUE if converged
-result$iterations   # Number of iterations
-result$evaluations  # List: fn, gr, hess counts
-result$message      # Why it stopped
+result$par                 # Optimal parameters
+result$value               # Optimal function value
+result$gradient            # Gradient at solution
+result$hessian             # Hessian at solution (exact in cubic/tr mode;
+                           # BFGS approximation if solver_mode_final == "qn_polish")
+result$converged           # TRUE if converged
+result$iterations          # Number of iterations
+result$evaluations         # List: fn, gr, hess counts
+result$message             # Why it stopped
+
+# Solver-mode diagnostics (populated by the hybrid dispatch)
+result$solver_mode_final   # "cubic", "tr", or "qn_polish" at termination
+result$ridge_switches      # count of cubic->TR transitions (0 or 1)
+result$radius_final        # final TR radius if switched; NA otherwise
+result$qn_polish_switches  # count of cubic->qn_polish transitions
+result$qn_polish_reverts   # count of qn_polish->cubic reversions
+result$hess_evals_at_polish_switch  # baseline for computing Hessian-eval savings
 ```
 
 ## References
