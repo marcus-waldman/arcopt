@@ -86,7 +86,7 @@ run_arcopt <- function(label, hybrid_on) {
   log_line(paste("  %-22s  f=%10.3f  |g|_inf=%7.2e  iter=%3d  time=%7.2fs",
                  "eig_min=%+9.2e  mode=%s  switches=%d  conv=%s  %s"),
            label, fit$value, max(abs(g)), fit$iterations, elapsed,
-           eig_min, fit$solver_mode_final, fit$ridge_switches,
+           eig_min, fit$diagnostics$solver_mode_final, fit$diagnostics$ridge_switches,
            isTRUE(fit$converged) && max(abs(g)) < gtol, status)
   list(label = label, fit = fit, elapsed = elapsed,
        eig_min = eig_min, status = status)
@@ -151,8 +151,8 @@ if (!is.null(res_hybrid$fit)) {
            res_hybrid$fit$iterations,
            max(abs(res_hybrid$fit$gradient)),
            res_hybrid$status,
-           res_hybrid$fit$solver_mode_final,
-           res_hybrid$fit$ridge_switches)
+           res_hybrid$fit$diagnostics$solver_mode_final,
+           res_hybrid$fit$diagnostics$ridge_switches)
 }
 
 # Success criteria (briefing §8 point 4):

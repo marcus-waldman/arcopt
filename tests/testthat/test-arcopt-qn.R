@@ -1,5 +1,18 @@
 # Tests for Quasi-Newton ARC Optimizer (Algorithm 4)
 # ==================================================
+#
+# arcopt_qn() is no longer publicly exported in v0.2.0. The shim below
+# routes every call site in this file through the public dispatch path
+# `arcopt(control = list(use_qn = TRUE, ...))`, so the existing tests
+# continue to exercise the same code path without per-call rewrites.
+arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
+                      lower = rep(-Inf, length(x0)),
+                      upper = rep(Inf, length(x0)),
+                      control = list()) {
+  control$use_qn <- TRUE
+  arcopt(x0 = x0, fn = fn, gr = gr, hess = hess, ...,
+         lower = lower, upper = upper, control = control)
+}
 
 # =============================================================================
 # Test Functions
@@ -123,9 +136,9 @@ test_that("arcopt_qn returns correct output structure", {
   expect_true("converged" %in% names(result))
   expect_true("iterations" %in% names(result))
   expect_true("evaluations" %in% names(result))
-  expect_true("qn_updates" %in% names(result))
-  expect_true("qn_skips" %in% names(result))
-  expect_true("qn_restarts" %in% names(result))
+  expect_true("qn_updates" %in% names(result$diagnostics))
+  expect_true("qn_skips" %in% names(result$diagnostics))
+  expect_true("qn_restarts" %in% names(result$diagnostics))
 
   expect_equal(length(result$par), 2)
   expect_true(is.numeric(result$value))
@@ -224,13 +237,13 @@ test_that("arcopt_qn tracks QN updates correctly", {
   )
 
   # Should have some updates
-  expect_true(result$qn_updates >= 0)
-  expect_true(result$qn_skips >= 0)
-  expect_true(result$qn_restarts >= 0)
+  expect_true(result$diagnostics$qn_updates >= 0)
+  expect_true(result$diagnostics$qn_skips >= 0)
+  expect_true(result$diagnostics$qn_restarts >= 0)
 
   # Total should be related to iterations
   # (each successful step attempts an update)
-  expect_true(result$qn_updates + result$qn_skips <= result$iterations)
+  expect_true(result$diagnostics$qn_updates + result$diagnostics$qn_skips <= result$iterations)
 })
 
 test_that("BFGS counts updates and skips", {
@@ -241,8 +254,8 @@ test_that("BFGS counts updates and skips", {
     control = list(qn_method = "bfgs", trace = 0)
   )
 
-  expect_true(result$qn_updates >= 0)
-  expect_true(result$qn_skips >= 0)
+  expect_true(result$diagnostics$qn_updates >= 0)
+  expect_true(result$diagnostics$qn_skips >= 0)
 })
 
 
@@ -646,9 +659,9 @@ test_that("arcopt_qn hybrid tracks QN updates correctly", {
   )
 
   # Should have some updates
-  expect_true(result$qn_updates > 0)
+  expect_true(result$diagnostics$qn_updates > 0)
   # Hybrid method should rarely skip since Powell is a fallback
-  expect_true(result$qn_skips <= result$qn_updates)
+  expect_true(result$diagnostics$qn_skips <= result$diagnostics$qn_updates)
 })
 
 
@@ -714,9 +727,9 @@ test_that("arcopt_qn returns qn_fd_refreshes in the result list", {
     fn = mix_nll, gr = mix_gr,
     control = list(qn_method = "hybrid", maxit = 500, trace = 0)
   )
-  expect_true("qn_fd_refreshes" %in% names(result))
-  expect_true(is.numeric(result$qn_fd_refreshes))
-  expect_gte(result$qn_fd_refreshes, 0)
+  expect_true("qn_fd_refreshes" %in% names(result$diagnostics))
+  expect_true(is.numeric(result$diagnostics$qn_fd_refreshes))
+  expect_gte(result$diagnostics$qn_fd_refreshes, 0)
 })
 
 test_that("arcopt_qn hybrid accepts routing control parameters", {
@@ -747,7 +760,7 @@ test_that("arcopt_qn FD refresh is active only in hybrid mode", {
       fn = mix_nll, gr = mix_gr,
       control = list(qn_method = method, maxit = 200, trace = 0)
     )
-    expect_identical(result$qn_fd_refreshes, 0L,
+    expect_identical(result$diagnostics$qn_fd_refreshes, 0L,
                      info = paste("method =", method))
   }
 })

@@ -13,9 +13,9 @@ test_that("qn_polish is disabled by default", {
                 control = list(maxit = 200, trace = 0))
 
   expect_true(res$converged)
-  expect_equal(res$qn_polish_switches, 0L)
-  expect_equal(res$qn_polish_reverts, 0L)
-  expect_equal(res$solver_mode_final, "cubic")
+  expect_equal(res$diagnostics$qn_polish_switches, 0L)
+  expect_equal(res$diagnostics$qn_polish_reverts, 0L)
+  expect_equal(res$diagnostics$solver_mode_final, "cubic")
 })
 
 test_that("arcopt result includes qn_polish fields", {
@@ -28,10 +28,11 @@ test_that("arcopt result includes qn_polish fields", {
 
   for (f in c("qn_polish_switches", "qn_polish_reverts",
               "hess_evals_at_polish_switch")) {
-    expect_true(f %in% names(res), info = paste("missing field:", f))
+    expect_true(f %in% names(res$diagnostics),
+                info = paste("missing diagnostics field:", f))
   }
-  expect_equal(res$qn_polish_switches, 0L)
-  expect_equal(res$qn_polish_reverts, 0L)
+  expect_equal(res$diagnostics$qn_polish_switches, 0L)
+  expect_equal(res$diagnostics$qn_polish_reverts, 0L)
 })
 
 test_that("qn_polish fires on smooth convex with quartic tail", {
@@ -49,8 +50,8 @@ test_that("qn_polish fires on smooth convex with quartic tail", {
 
   expect_true(res$converged)
   expect_true(max(abs(res$par)) < 1e-4)
-  expect_gte(res$qn_polish_switches, 1L)
-  expect_equal(res$solver_mode_final, "qn_polish")
+  expect_gte(res$diagnostics$qn_polish_switches, 1L)
+  expect_equal(res$diagnostics$solver_mode_final, "qn_polish")
 })
 
 test_that("qn_polish saves >= 30% Hessian evaluations on smooth convex", {
@@ -72,7 +73,7 @@ test_that("qn_polish saves >= 30% Hessian evaluations on smooth convex", {
 
   expect_true(res_off$converged)
   expect_true(res_on$converged)
-  expect_gte(res_on$qn_polish_switches, 1L)
+  expect_gte(res_on$diagnostics$qn_polish_switches, 1L)
   # Saves >= 30% Hessian evals on this problem with default thresholds
   expect_true(evals_on <= 0.7 * evals_off,
               info = sprintf("evals_off=%d evals_on=%d", evals_off, evals_on))
@@ -97,7 +98,7 @@ test_that("qn_polish saves >= 50% Hessian evaluations with loose thresholds", {
 
   expect_true(res_off$converged)
   expect_true(res_on$converged)
-  expect_gte(res_on$qn_polish_switches, 1L)
+  expect_gte(res_on$diagnostics$qn_polish_switches, 1L)
   expect_true(res_on$evaluations$hess <= 0.5 * res_off$evaluations$hess,
               info = sprintf("evals_off=%d evals_on=%d",
                              res_off$evaluations$hess,
@@ -117,8 +118,8 @@ test_that("qn_polish does not fire on pure quadratic (Newton done in 1 iter)", {
                 control = list(maxit = 50, trace = 0,
                                qn_polish_enabled = TRUE))
   expect_true(res$converged)
-  expect_equal(res$qn_polish_switches, 0L)
-  expect_equal(res$solver_mode_final, "cubic")
+  expect_equal(res$diagnostics$qn_polish_switches, 0L)
+  expect_equal(res$diagnostics$solver_mode_final, "cubic")
   expect_equal(res$par, solve(A, b), tolerance = 1e-6)
 })
 
@@ -140,7 +141,7 @@ test_that("qn_polish and tr_fallback do not collide on well-behaved problems", {
                                qn_polish_enabled = TRUE))
   expect_true(res$converged)
   expect_equal(res$par, c(1, 1), tolerance = 1e-4)
-  expect_equal(res$ridge_switches, 0L)
+  expect_equal(res$diagnostics$ridge_switches, 0L)
 })
 
 test_that("qn_polish branch produces finite outputs on near-minimum start", {
@@ -182,9 +183,9 @@ test_that("qn_polish reverts to cubic when line search fails repeatedly", {
   # Polish should fire, then revert, possibly multiple times.
   # Must still converge.
   expect_true(res$converged)
-  expect_gte(res$qn_polish_switches, 1L,
+  expect_gte(res$diagnostics$qn_polish_switches, 1L,
              label = "polish fired at least once")
-  expect_gte(res$qn_polish_reverts, 1L,
+  expect_gte(res$diagnostics$qn_polish_reverts, 1L,
              label = "revert happened at least once under tight c2")
 })
 
@@ -214,8 +215,8 @@ test_that("qn_polish cooldown prevents immediate re-entry after revert", {
   # With reenter_delay = 5, between consecutive polish->cubic->polish
   # cycles there must be at least 5 cubic iterations. Over maxit = 50,
   # this bounds the number of switches.
-  expect_true(res$qn_polish_switches <= ceiling(50 / 5),
-              info = sprintf("switches = %d", res$qn_polish_switches))
+  expect_true(res$diagnostics$qn_polish_switches <= ceiling(50 / 5),
+              info = sprintf("switches = %d", res$diagnostics$qn_polish_switches))
 })
 
 test_that("qn_polish revert leaves cubic state usable", {

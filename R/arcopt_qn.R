@@ -85,18 +85,18 @@
 #' `indefinite`-mode counters (since they are gated on being in cubic
 #' mode).
 #'
-#' @return Same structure as arcopt, plus:
-#' * `qn_updates`: Number of successful QN updates
-#' * `qn_skips`: Number of skipped updates
-#' * `qn_restarts`: Number of approximation restarts
-#' * `qn_fd_refreshes`: Number of FD Hessian refreshes performed (hybrid
-#'   mode only; 0 for other qn_method values)
-#' * `solver_mode_final`: `"cubic"` or `"tr"` — which subproblem solver
-#'   was active at termination
-#' * `ridge_switches`: Integer count of cubic->TR transitions (0 or 1 in
-#'   v1, the switch is one-way)
-#' * `radius_final`: Final trust-region radius (`NA` if the solver never
-#'   switched to TR mode)
+#' @return Same structure as `\link{arcopt}`. The `diagnostics` sublist
+#'   gains four QN-specific counters in addition to the standard mode-
+#'   dispatch fields:
+#'   * `qn_updates`: number of successful QN updates;
+#'   * `qn_skips`: number of skipped updates (curvature condition failed);
+#'   * `qn_restarts`: number of approximation restarts;
+#'   * `qn_fd_refreshes`: number of FD Hessian refreshes performed
+#'     (hybrid mode only; 0 otherwise).
+#'
+#'   `qn_polish_switches`, `qn_polish_reverts`, and
+#'   `hess_evals_at_polish_switch` are always `0L`/`NA` for QN runs
+#'   (the polish mode is exact-Hessian only).
 #'
 #' @keywords internal
 arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
@@ -126,9 +126,11 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
   # Default control parameters
   control_defaults <- list(
     maxit = 1000,
-    ftol_abs = 1e-8,
     gtol_abs = 1e-5,
+    ftol_abs = 1e-8,
     xtol_abs = 1e-8,
+    trace = 1,
+    verbose = FALSE,
     sigma0 = 1.0,
     sigma_min = 1e-6,
     sigma_max = 1e12,
@@ -182,8 +184,7 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
     tr_eta1 = 0.25,
     tr_eta2 = 0.75,
     tr_gamma_shrink = 0.25,
-    tr_gamma_grow = 2.0,
-    trace = 1
+    tr_gamma_grow = 2.0
   )
 
   control <- modifyList(control_defaults, control)
@@ -442,8 +443,7 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
     cubic_result <- solve_cubic_subproblem_dispatch(
       g = g_subproblem,
       H = b_current,
-      sigma = sigma_current,
-      solver = "eigen"
+      sigma = sigma_current
     )
     s_current <- cubic_result$s
 
@@ -693,16 +693,19 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
       }
     }
 
-    iter <- iter + 1
-
-    # Print progress if tracing
-    if (control$trace >= 1 && iter %% 10 == 0) {
-      g_norm <- sqrt(sum(g_current^2))
+    if (isTRUE(control$verbose)) {
+      scale_label <- if (solver_mode == "tr") "radius" else "sigma"
+      scale_value <- if (solver_mode == "tr") radius_current else sigma_current
       message(sprintf(
-        "Iter %4d: f = %.6e, |g| = %.6e, sigma = %.2e",
-        iter, f_current, g_norm, sigma_current
+        "iter %4d  f = %12.6e  |g|_inf = %9.3e  %s = %9.3e  mode = %s (qn)",
+        iter + 1L, f_current, max(abs(g_current)),
+        scale_label,
+        if (is.null(scale_value) || !is.finite(scale_value)) NA_real_ else scale_value,
+        solver_mode
       ))
     }
+
+    iter <- iter + 1
   }
 
   # Check if max iterations reached
@@ -718,6 +721,7 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
     value = f_current,
     gradient = g_current,
     hessian = h_final,
+    sigma = sigma_current,
     converged = converged,
     iterations = iter,
     evaluations = list(
@@ -726,12 +730,17 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
       hess = hess_evals
     ),
     message = conv_reason,
-    qn_updates = qn_updates,
-    qn_skips = qn_skips,
-    qn_restarts = qn_restarts,
-    qn_fd_refreshes = qn_fd_refreshes,
-    solver_mode_final = solver_mode,
-    ridge_switches = ridge_switches,
-    radius_final = radius_current
+    diagnostics = list(
+      solver_mode_final = solver_mode,
+      ridge_switches = ridge_switches,
+      radius_final = radius_current,
+      qn_polish_switches = 0L,
+      qn_polish_reverts = 0L,
+      hess_evals_at_polish_switch = NA_integer_,
+      qn_updates = qn_updates,
+      qn_skips = qn_skips,
+      qn_restarts = qn_restarts,
+      qn_fd_refreshes = qn_fd_refreshes
+    )
   )
 }

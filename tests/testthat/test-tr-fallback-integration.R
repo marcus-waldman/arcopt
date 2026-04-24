@@ -17,8 +17,8 @@ test_that("arcopt still converges on Rosenbrock with TR-fallback enabled", {
   expect_true(res$converged)
   expect_equal(res$par, c(1, 1), tolerance = 1e-4)
   # Rosenbrock has a curved valley but not a flat ridge; detector must NOT fire
-  expect_equal(res$ridge_switches, 0L)
-  expect_equal(res$solver_mode_final, "cubic")
+  expect_equal(res$diagnostics$ridge_switches, 0L)
+  expect_equal(res$diagnostics$solver_mode_final, "cubic")
 })
 
 test_that("detector-forced TR branch produces finite, decreasing sequence", {
@@ -43,7 +43,7 @@ test_that("detector-forced TR branch produces finite, decreasing sequence", {
   # Whether or not the detector fired, the run must not crash or produce NaN.
   expect_true(all(is.finite(res$par)))
   expect_true(is.finite(res$value))
-  expect_true(res$solver_mode_final %in% c("cubic", "tr"))
+  expect_true(res$diagnostics$solver_mode_final %in% c("cubic", "tr"))
 })
 
 test_that("TR-fallback disabled leaves behavior unchanged", {
@@ -64,8 +64,8 @@ test_that("TR-fallback disabled leaves behavior unchanged", {
 
   expect_true(res_off$converged)
   expect_equal(res_off$par, c(1, 1), tolerance = 1e-4)
-  expect_equal(res_off$ridge_switches, 0L)
-  expect_equal(res_off$solver_mode_final, "cubic")
+  expect_equal(res_off$diagnostics$ridge_switches, 0L)
+  expect_equal(res_off$diagnostics$solver_mode_final, "cubic")
 })
 
 test_that("arcopt result includes new TR-fallback fields", {
@@ -83,7 +83,8 @@ test_that("arcopt result includes new TR-fallback fields", {
                 control = list(maxit = 200, trace = 0))
 
   for (f in c("solver_mode_final", "ridge_switches", "radius_final")) {
-    expect_true(f %in% names(res), info = paste("missing field:", f))
+    expect_true(f %in% names(res$diagnostics),
+                info = paste("missing diagnostics field:", f))
   }
 })
 
@@ -102,12 +103,13 @@ test_that("arcopt_qn still converges on Rosenbrock with TR-fallback enabled", {
 
   # Must not crash and must return all TR fields
   for (f in c("solver_mode_final", "ridge_switches", "radius_final")) {
-    expect_true(f %in% names(res), info = paste("missing field:", f))
+    expect_true(f %in% names(res$diagnostics),
+                info = paste("missing diagnostics field:", f))
   }
   expect_true(all(is.finite(res$par)))
   # Rosenbrock has no true flat ridge; detector should not fire
-  expect_equal(res$ridge_switches, 0L)
-  expect_equal(res$solver_mode_final, "cubic")
+  expect_equal(res$diagnostics$ridge_switches, 0L)
+  expect_equal(res$diagnostics$solver_mode_final, "cubic")
 })
 
 test_that("arcopt_qn with tr_fallback disabled has ridge_switches == 0", {
@@ -124,6 +126,6 @@ test_that("arcopt_qn with tr_fallback disabled has ridge_switches == 0", {
                    tr_fallback_enabled = FALSE)
   )
 
-  expect_equal(res$ridge_switches, 0L)
-  expect_equal(res$solver_mode_final, "cubic")
+  expect_equal(res$diagnostics$ridge_switches, 0L)
+  expect_equal(res$diagnostics$solver_mode_final, "cubic")
 })

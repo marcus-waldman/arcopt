@@ -1,7 +1,7 @@
 Package: arcopt
 Type: Package
 Title: Adaptive Regularization using Cubics for Optimization
-Version: 0.1.1.9000
+Version: 0.2.0.9000
 Authors@R: c(
     person("Marcus", "Waldman", email = "your.email@domain.com",
            role = c("aut", "cre")))
