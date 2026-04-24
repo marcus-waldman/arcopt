@@ -1,0 +1,15 @@
+Compiling Stan model... 
+Simulating seed=101  n_obs=500  K_trunc=20  K_true=2 
+  n_params=299  sel_rate=0.41  f(x0)=1273.61  maxit=200 
+--- HYBRID (devtools::load_all) --- 
+elapsed:           287.18 s 
+f:                 674.991 
+|g|_inf:           1.65e-04 
+iterations:        125 
+eig_min:           +1.570e-02 
+status:            local min 
+solver_mode_final: tr 
+ridge_switches:    1 
+radius_final:      2.000e+00 
+converged:         TRUE 
+message:           gradient_rel 

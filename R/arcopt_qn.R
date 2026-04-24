@@ -71,12 +71,32 @@
 #'   this many iterations without promoting also triggers an FD refresh
 #'   (safety net for secondary-saddle stalls)
 #'
+#' ## Trust-Region Fallback
+#'
+#' All `tr_fallback_*` and `tr_*` control parameters from
+#' \code{\link{arcopt}} are respected. In QN mode the flat-ridge detector
+#' uses `lambda_min(B_k)` (the QN approximation's smallest eigenvalue)
+#' as the ridge signal, consistent with the quantity the cubic subproblem
+#' acts on. The ridge detector and the QN FD-refresh triggers are
+#' mutually exclusive: the FD refresh fires only in `"indefinite"`
+#' routing mode, while the ridge detector requires `lambda_min(B_k) > 0`,
+#' so both cannot fire on the same iteration. If the one-way switch to
+#' trust-region mode occurs, subsequent iterations no longer update the
+#' `indefinite`-mode counters (since they are gated on being in cubic
+#' mode).
+#'
 #' @return Same structure as arcopt, plus:
 #' * `qn_updates`: Number of successful QN updates
 #' * `qn_skips`: Number of skipped updates
 #' * `qn_restarts`: Number of approximation restarts
 #' * `qn_fd_refreshes`: Number of FD Hessian refreshes performed (hybrid
 #'   mode only; 0 for other qn_method values)
+#' * `solver_mode_final`: `"cubic"` or `"tr"` — which subproblem solver
+#'   was active at termination
+#' * `ridge_switches`: Integer count of cubic->TR transitions (0 or 1 in
+#'   v1, the switch is one-way)
+#' * `radius_final`: Final trust-region radius (`NA` if the solver never
+#'   switched to TR mode)
 #'
 #' @keywords internal
 arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
@@ -143,6 +163,26 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
     # Nesterov acceleration (Algorithm 4b) - EXPERIMENTAL, disabled by default
     # Can hurt convergence on nonconvex problems; needs adaptive restart logic
     use_accel_qn = FALSE,
+    # Trust-region fallback (cubic -> TR on flat-ridge detection; parallel to
+    # arcopt.R). In QN mode the detector uses lambda_min(B_k), the QN
+    # approximation's smallest eigenvalue. Mutually exclusive with QN FD
+    # refresh: the FD refresh fires only in "indefinite" routing mode, the
+    # ridge detector only when lambda_min(B_k) > 0, so they can't both
+    # fire simultaneously. A ridge-triggered TR switch also stops the
+    # FD-refresh-eligible counters from accumulating because we leave
+    # cubic mode.
+    tr_fallback_enabled = TRUE,
+    tr_fallback_window = 10,
+    tr_fallback_tol_ridge = 1e-3,
+    tr_fallback_rho_tol = 0.1,
+    tr_fallback_grad_decrease_max = 0.9,
+    tr_fallback_g_inf_floor = 1e-6,
+    tr_r0 = 1.0,
+    tr_rmax = 100,
+    tr_eta1 = 0.25,
+    tr_eta2 = 0.75,
+    tr_gamma_shrink = 0.25,
+    tr_gamma_grow = 2.0,
     trace = 1
   )
 
@@ -243,6 +283,13 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
     a_sum <- 1.0            # Cumulative sum A_k = sum of a_j
   }
 
+  # Trust-region fallback state (one-way switch cubic -> tr); mirrors arcopt.R.
+  solver_mode <- "cubic"
+  ridge_state <- init_flat_ridge_state(window = control$tr_fallback_window)
+  radius_current <- NA_real_
+  ridge_switches <- 0L
+  last_step_norm_tracked <- NA_real_
+
   # Main optimization loop
   while (iter < control$maxit) {
     # STEP 1: Check convergence
@@ -265,6 +312,110 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
       converged <- TRUE
       conv_reason <- conv_result$reason
       break
+    }
+
+    # rho is tracked across both modes; TR branch and cubic branch each set it
+    rho <- NA_real_
+
+    # -- Trust-region fallback branch (used after one-way switch from cubic) --
+    if (solver_mode == "tr") {
+      tr_result <- solve_tr_eigen(g_current, b_current, radius_current)
+      s_current <- tr_result$s
+      pred_reduction <- tr_result$pred_reduction
+      on_boundary <- isTRUE(tr_result$on_boundary)
+
+      box_result <- apply_box_constraints(x_current, s_current, lower, upper)
+      s_current <- box_result$s_bounded
+      x_trial <- box_result$x_new
+
+      f_trial <- fn(x_trial, ...)
+      fn_evals <- fn_evals + 1
+
+      if (!check_finite(f_trial, rep(0, n))) {
+        radius_current <- max(radius_current * control$tr_gamma_shrink,
+                              .Machine$double.eps)
+      } else {
+        actual_reduction <- f_current - f_trial
+        if (abs(pred_reduction) < .Machine$double.eps) {
+          rho <- if (actual_reduction >= 0) 1.0 else 0.0
+        } else {
+          rho <- actual_reduction / pred_reduction
+        }
+
+        if (is.finite(rho) && rho >= control$tr_eta1) {
+          x_previous <- x_current
+          f_previous <- f_current
+          g_previous <- g_current
+          x_current <- x_trial
+          f_current <- f_trial
+          g_current <- gr(x_current, ...)
+          gr_evals <- gr_evals + 1
+          if (!check_finite(f_current, g_current)) {
+            stop("NaN or Inf detected in gradient at accepted TR point")
+          }
+
+          # Update QN approximation on accepted TR step, same as in cubic mode
+          s_vec <- x_current - x_previous
+          y_vec <- g_current - g_previous
+          if (control$qn_method == "hybrid") {
+            hybrid_fn <- if (routing_mode == "indefinite") {
+              update_hybrid_sr1_first
+            } else {
+              update_hybrid
+            }
+            update_result <- hybrid_fn(
+              b_current, s_vec, y_vec,
+              bfgs_tol = control$bfgs_tol,
+              sr1_skip_tol = control$sr1_skip_tol,
+              skip_count = skip_count,
+              restart_threshold = control$sr1_restart_threshold
+            )
+            b_current <- update_result$b
+            skip_count <- update_result$skip_count
+          } else if (control$qn_method == "sr1") {
+            update_result <- update_sr1(
+              b_current, s_vec, y_vec,
+              skip_tol = control$sr1_skip_tol,
+              skip_count = skip_count,
+              restart_threshold = control$sr1_restart_threshold
+            )
+            b_current <- update_result$b
+            skip_count <- update_result$skip_count
+          } else {
+            update_result <- update_bfgs(b_current, s_vec, y_vec)
+            b_current <- update_result$b
+          }
+          if (!is.null(update_result$skipped) && update_result$skipped) {
+            qn_skips <- qn_skips + 1
+          } else {
+            qn_updates <- qn_updates + 1
+          }
+          if (!is.null(update_result$restarted) && update_result$restarted) {
+            qn_restarts <- qn_restarts + 1
+          }
+          step_norms <- c(step_norms, sqrt(sum(s_vec^2)))
+          f_values <- c(f_values, f_current)
+        }
+
+        # Radius update
+        if (!is.finite(rho) || rho < control$tr_eta1) {
+          radius_current <- max(radius_current * control$tr_gamma_shrink,
+                                .Machine$double.eps)
+        } else if (rho >= control$tr_eta2 && on_boundary) {
+          radius_current <- min(radius_current * control$tr_gamma_grow,
+                                control$tr_rmax)
+        }
+      }
+
+      iter <- iter + 1
+      if (control$trace >= 1 && iter %% 10 == 0) {
+        g_norm <- sqrt(sum(g_current^2))
+        message(sprintf(
+          "Iter %4d [tr]: f = %.6e, |g| = %.6e, r = %.2e",
+          iter, f_current, g_norm, radius_current
+        ))
+      }
+      next
     }
 
     # STEP 1b: Nesterov acceleration - compute interpolation point (Algorithm 4b)
@@ -509,6 +660,39 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
       sigma_max = control$sigma_max
     )
 
+    # Update flat-ridge detector; switch to TR mode if all four signals fire.
+    # Uses lambda_min(B_k), the QN approximation's smallest eigenvalue
+    # (the same quantity that governs the cubic subproblem's step quality).
+    if (control$tr_fallback_enabled && is.finite(rho)) {
+      lambda_min_current <- tryCatch(
+        min(eigen(b_current, symmetric = TRUE, only.values = TRUE)$values),
+        error = function(e) NA_real_
+      )
+      ridge_state <- update_flat_ridge_state(
+        ridge_state,
+        sigma = sigma_current,
+        rho = rho,
+        g_inf = max(abs(g_current)),
+        lambda_min = lambda_min_current
+      )
+      if (check_flat_ridge_trigger(
+        ridge_state,
+        sigma_min = control$sigma_min,
+        tol_ridge = control$tr_fallback_tol_ridge,
+        rho_tol = control$tr_fallback_rho_tol,
+        grad_decrease_max = control$tr_fallback_grad_decrease_max,
+        g_inf_floor = control$tr_fallback_g_inf_floor
+      )) {
+        solver_mode <- "tr"
+        # Start TR with the control's `tr_r0` (default 1.0, matching
+        # `trust::trust`'s `rinit`). Cubic's last step norm is unreliable
+        # because sigma-at-floor produces huge steps right before the
+        # detector fires.
+        radius_current <- min(control$tr_r0, control$tr_rmax)
+        ridge_switches <- ridge_switches + 1L
+      }
+    }
+
     iter <- iter + 1
 
     # Print progress if tracing
@@ -545,6 +729,9 @@ arcopt_qn <- function(x0, fn, gr, hess = NULL, ...,
     qn_updates = qn_updates,
     qn_skips = qn_skips,
     qn_restarts = qn_restarts,
-    qn_fd_refreshes = qn_fd_refreshes
+    qn_fd_refreshes = qn_fd_refreshes,
+    solver_mode_final = solver_mode,
+    ridge_switches = ridge_switches,
+    radius_final = radius_current
   )
 }

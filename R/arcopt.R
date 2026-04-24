@@ -60,6 +60,41 @@
 #' * `qn_method`: QN update method - "sr1", "bfgs", "lbfgs", "lsr1"
 #'   (default: "sr1"). Only used when `use_qn = TRUE`.
 #'
+#' ## Trust-Region Fallback (Flat-Ridge Detector)
+#'
+#' Cubic regularization can stagnate in "flat-ridge" regimes — iterations
+#' with the regularization floor pinned, model predictions matching the
+#' objective (rho approx 1), gradient stalling, and a Hessian that is
+#' positive-definite but nearly singular. This behavior is outside the
+#' local-error-bound condition of Yue, Zhou & So (2018) under which
+#' cubic regularization is guaranteed to converge quadratically at
+#' degenerate minimizers. In those regimes, arcopt can switch (once) from
+#' the cubic subproblem to a trust-region subproblem, which places a hard
+#' step-norm constraint instead of a cubic penalty and is more effective
+#' at walking off near-singular ridges.
+#'
+#' * `tr_fallback_enabled`: Enable the one-way cubic->TR switch
+#'   (default: `TRUE`).
+#' * `tr_fallback_window`: Sliding-window length for the detector
+#'   (default: `10`).
+#' * `tr_fallback_tol_ridge`: `lambda_min` threshold defining a
+#'   "near-singular PD" Hessian (default: `1e-3`).
+#' * `tr_fallback_rho_tol`: Tolerance on `|rho - 1|` for the
+#'   "near-perfect model" signal (default: `0.1`).
+#' * `tr_fallback_grad_decrease_max`: Ratio of latest to oldest
+#'   `||g||_inf` above which the gradient counts as stagnant
+#'   (default: `0.9`).
+#' * `tr_fallback_g_inf_floor`: Absolute lower bound on `||g||_inf`;
+#'   the switch will not fire below this value so the hybrid does not
+#'   trigger at true local minima (default: `1e-6`).
+#' * `tr_rmax`: Maximum trust-region radius (default: `1e6`).
+#' * `tr_eta1`: TR step-acceptance threshold (default: `0.25`).
+#' * `tr_eta2`: TR expansion threshold (default: `0.75`).
+#' * `tr_gamma_shrink`: Radius shrink factor on a poor step
+#'   (default: `0.25`).
+#' * `tr_gamma_grow`: Radius grow factor on a very good boundary step
+#'   (default: `2.0`).
+#'
 #' @return A list with components:
 #' * `par`: Optimal parameter vector
 #' * `value`: Optimal function value
@@ -69,6 +104,12 @@
 #' * `iterations`: Number of iterations performed
 #' * `evaluations`: List with `fn`, `gr`, and `hess` evaluation counts
 #' * `message`: Convergence message
+#' * `solver_mode_final`: `"cubic"` or `"tr"` — which subproblem solver was
+#'   active at termination
+#' * `ridge_switches`: Integer count of cubic->TR switches (0 or 1 in v1,
+#'   the switch is one-way)
+#' * `radius_final`: Final trust-region radius (`NA` if the solver never
+#'   switched to TR mode)
 #'
 #' @importFrom utils modifyList
 #' @export
@@ -151,6 +192,19 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
     momentum_tau = 0.5,
     momentum_alpha1 = 0.1,
     momentum_alpha2 = 1.0,
+    # Trust-region fallback (cubic -> TR on flat-ridge detection)
+    tr_fallback_enabled = TRUE,
+    tr_fallback_window = 10,
+    tr_fallback_tol_ridge = 1e-3,
+    tr_fallback_rho_tol = 0.1,
+    tr_fallback_grad_decrease_max = 0.9,
+    tr_fallback_g_inf_floor = 1e-6,
+    tr_r0 = 1.0,
+    tr_rmax = 100,
+    tr_eta1 = 0.25,
+    tr_eta2 = 0.75,
+    tr_gamma_shrink = 0.25,
+    tr_gamma_grow = 2.0,
     trace = 1
   )
 
@@ -176,6 +230,13 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
   # Momentum state (Gao et al. Algorithm 1)
   # v_prev initialized to zero vector per Gao: v_{-1} = 0
   v_prev <- rep(0, length(x0))
+
+  # Trust-region fallback state (one-way switch cubic -> tr)
+  solver_mode <- "cubic"
+  ridge_state <- init_flat_ridge_state(window = control$tr_fallback_window)
+  radius_current <- NA_real_
+  ridge_switches <- 0L
+  s_current <- NULL # last step; used to seed TR radius at switch
 
   # Initial evaluation
   f_current <- fn(x_current, ...)
@@ -292,6 +353,61 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
       already_refreshed <- TRUE
     }
 
+    # STEP 2 / 3 in cubic mode; TR branch in tr mode
+    rho <- NA_real_ # will be set by whichever branch runs
+
+    if (solver_mode == "tr") {
+      # --- Trust-region fallback branch ---
+      step_type <- "tr"
+      tr_result <- solve_tr_eigen(g_current, h_current, radius_current)
+      s_current <- tr_result$s
+      pred_reduction <- tr_result$pred_reduction
+      on_boundary <- isTRUE(tr_result$on_boundary)
+
+      box_result <- apply_box_constraints(x_current, s_current, lower, upper)
+      s_current <- box_result$s_bounded
+      x_trial <- box_result$x_new
+
+      f_trial <- fn(x_trial, ...)
+      fn_evals <- fn_evals + 1
+
+      if (!check_finite(f_trial, rep(0, length(x_trial)))) {
+        # Non-finite trial: shrink radius and try again next iter
+        radius_current <- max(radius_current * control$tr_gamma_shrink,
+                              .Machine$double.eps)
+        rho <- -Inf
+      } else {
+        actual_reduction <- f_current - f_trial
+        rho <- actual_reduction / pred_reduction
+
+        if (is.finite(rho) && rho >= control$tr_eta1) {
+          x_previous <- x_current
+          f_previous <- f_current
+          x_current <- x_trial
+          f_current <- f_trial
+          g_current <- gr(x_current, ...)
+          gr_evals <- gr_evals + 1
+          if (!check_finite(f_current, g_current)) {
+            stop("NaN or Inf detected in gradient at accepted TR point")
+          }
+          h_current <- hess(x_current, ...)
+          hess_evals <- hess_evals + 1
+          step_norms <- c(step_norms, sqrt(sum(s_current^2)))
+          f_values <- c(f_values, f_current)
+        }
+
+        # Radius update
+        if (!is.finite(rho) || rho < control$tr_eta1) {
+          radius_current <- max(radius_current * control$tr_gamma_shrink,
+                                .Machine$double.eps)
+        } else if (rho >= control$tr_eta2 && on_boundary) {
+          radius_current <- min(radius_current * control$tr_gamma_grow,
+                                control$tr_rmax)
+        }
+      }
+    }
+
+    if (solver_mode == "cubic") {
     # STEP 2: Try Newton step first (if not rejected and hess provided)
     step_type <- "cubic"
     used_newton <- FALSE
@@ -541,6 +657,39 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
       )
     }
 
+    # Update flat-ridge detector; switch to TR mode if all four signals fire
+    if (control$tr_fallback_enabled && is.finite(rho)) {
+      lambda_min_current <- tryCatch(
+        min(eigen(h_current, symmetric = TRUE, only.values = TRUE)$values),
+        error = function(e) NA_real_
+      )
+      ridge_state <- update_flat_ridge_state(
+        ridge_state,
+        sigma = sigma_current,
+        rho = rho,
+        g_inf = max(abs(g_current)),
+        lambda_min = lambda_min_current
+      )
+      if (check_flat_ridge_trigger(
+        ridge_state,
+        sigma_min = control$sigma_min,
+        tol_ridge = control$tr_fallback_tol_ridge,
+        rho_tol = control$tr_fallback_rho_tol,
+        grad_decrease_max = control$tr_fallback_grad_decrease_max,
+        g_inf_floor = control$tr_fallback_g_inf_floor
+      )) {
+        solver_mode <- "tr"
+        # Start TR with the control's `tr_r0` (default 1.0, matching
+        # `trust::trust`'s `rinit`). The last cubic step norm is NOT a
+        # reliable initializer because cubic often takes huge huge steps
+        # (scale 1/sigma) right before the detector fires. TR then grows
+        # or shrinks the radius adaptively based on the subsequent rhos.
+        radius_current <- min(control$tr_r0, control$tr_rmax)
+        ridge_switches <- ridge_switches + 1L
+      }
+    }
+    } # end if (solver_mode == "cubic")
+
     # Capture trace data for this iteration
     if (control$trace >= 1) {
       iter_end_time <- Sys.time()
@@ -653,7 +802,10 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
     converged = converged,
     iterations = iter,
     evaluations = list(fn = fn_evals, gr = gr_evals, hess = hess_evals),
-    message = conv_reason
+    message = conv_reason,
+    solver_mode_final = solver_mode,
+    ridge_switches = ridge_switches,
+    radius_final = radius_current
   )
 
   # Add trace data if collected

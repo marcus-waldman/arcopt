@@ -43,3 +43,10 @@ vignettes/*.pdf
 
 # Empty directories
 todo/
+
+# Benchmark runtime artifacts (keep .R scripts and .csv / .txt result snapshots)
+benchmarks/**/*.log
+benchmarks/dpm_heckman/.dummy_data.json
+benchmarks/dpm_heckman/*.dll
+benchmarks/dpm_heckman/*.so
+lib/
