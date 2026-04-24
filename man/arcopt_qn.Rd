@@ -34,20 +34,20 @@ initializes B_0 = H(x_0) and can refresh when approximation degrades.}
 \item{control}{List of control parameters (see Details).}
 }
 \value{
-Same structure as arcopt, plus:
+Same structure as \verb{\link{arcopt}}. The \code{diagnostics} sublist
+gains four QN-specific counters in addition to the standard mode-
+dispatch fields:
 \itemize{
-\item \code{qn_updates}: Number of successful QN updates
-\item \code{qn_skips}: Number of skipped updates
-\item \code{qn_restarts}: Number of approximation restarts
-\item \code{qn_fd_refreshes}: Number of FD Hessian refreshes performed (hybrid
-mode only; 0 for other qn_method values)
-\item \code{solver_mode_final}: \code{"cubic"} or \code{"tr"} — which subproblem solver
-was active at termination
-\item \code{ridge_switches}: Integer count of cubic->TR transitions (0 or 1 in
-v1, the switch is one-way)
-\item \code{radius_final}: Final trust-region radius (\code{NA} if the solver never
-switched to TR mode)
+\item \code{qn_updates}: number of successful QN updates;
+\item \code{qn_skips}: number of skipped updates (curvature condition failed);
+\item \code{qn_restarts}: number of approximation restarts;
+\item \code{qn_fd_refreshes}: number of FD Hessian refreshes performed
+(hybrid mode only; 0 otherwise).
 }
+
+\code{qn_polish_switches}, \code{qn_polish_reverts}, and
+\code{hess_evals_at_polish_switch} are always \code{0L}/\code{NA} for QN runs
+(the polish mode is exact-Hessian only).
 }
 \description{
 Minimizes a nonlinear objective function using Adaptive Regularization with

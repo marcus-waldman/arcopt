@@ -18,14 +18,15 @@ arcopt(
 \arguments{
 \item{x0}{Numeric vector of initial parameter values (length Q).}
 
-\item{fn}{Function that computes the objective function value. Should take a
-numeric vector of length Q and return a scalar.}
+\item{fn}{Function that computes the objective function value. Should take
+a numeric vector of length Q and return a scalar.}
 
-\item{gr}{Function that computes the gradient. Should take a numeric vector
-of length Q and return a numeric vector of length Q. Required.}
+\item{gr}{Function that computes the gradient. Should take a numeric
+vector of length Q and return a numeric vector of length Q. Required.}
 
-\item{hess}{Function that computes the Hessian matrix. Should take a numeric
-vector of length Q and return a Q×Q symmetric matrix. Required.}
+\item{hess}{Function that computes the Hessian matrix. Should take a
+numeric vector of length Q and return a Q-by-Q symmetric matrix.
+Required (unless \code{control$use_qn = TRUE}; see Details).}
 
 \item{...}{Additional arguments passed to \code{fn}, \code{gr}, and \code{hess}.}
 
@@ -35,31 +36,60 @@ unbounded parameters. Default: all \code{-Inf}.}
 \item{upper}{Numeric vector of upper bounds (length Q). Use \code{Inf} for
 unbounded parameters. Default: all \code{Inf}.}
 
-\item{control}{List of control parameters (see Details).}
+\item{control}{A named list of control parameters. The user-facing
+tolerances and switches are documented below; advanced regularization
+tuning, the trust-region fallback, and the quasi-Newton polish mode
+live on a separate help page (see \verb{\link{arcopt_advanced_controls}}).
+Recognized entries:
+\describe{
+\item{\code{maxit}}{Maximum number of iterations (default \code{1000}).}
+\item{\code{gtol_abs}}{Absolute gradient-norm tolerance for convergence
+(default \code{1e-5}).}
+\item{\code{ftol_abs}}{Absolute objective-value tolerance (default
+\code{1e-8}).}
+\item{\code{xtol_abs}}{Absolute step-size tolerance (default \code{1e-8}).}
+\item{\code{trace}}{Integer in \code{0:3}. Depth of per-iteration data captured
+into \code{result$trace}: \code{0} collects nothing, \code{1} (the default)
+collects function value and gradient norm, \code{2} adds sigma, rho,
+step type and reciprocal Hessian condition number, \code{3} adds the
+full iterate, step, Hessian and convergence-criterion record.
+This flag controls \emph{saved} data only — for live console output
+see \code{verbose}.}
+\item{\code{verbose}}{Logical. If \code{TRUE}, prints one line per iteration
+to the console showing iteration number, objective value,
+\verb{||g||_inf}, ratio rho, regularization scale, and active solver
+mode (default \code{FALSE}). Orthogonal to \code{trace}.}
+\item{\code{use_qn}}{Logical. If \code{TRUE}, route to the quasi-Newton ARC
+variant, which approximates the Hessian via SR1/BFGS updates and
+does not require an analytic \code{hess} function. See the
+advanced-controls page for QN-specific parameters (default
+\code{FALSE}).}
+}
+See \verb{\link{arcopt_advanced_controls}} for the full set of advanced
+tuning parameters governing the cubic regularization, the trust-region
+fallback, and the quasi-Newton polish mode.}
 }
 \value{
 A list with components:
 \itemize{
-\item \code{par}: Optimal parameter vector
-\item \code{value}: Optimal function value
-\item \code{gradient}: Gradient at optimum
-\item \code{hessian}: Hessian at optimum (if \code{hess} provided)
-\item \code{converged}: Logical, whether convergence criteria met
-\item \code{iterations}: Number of iterations performed
-\item \code{evaluations}: List with \code{fn}, \code{gr}, and \code{hess} evaluation counts
-\item \code{message}: Convergence message
-\item \code{solver_mode_final}: \code{"cubic"}, \code{"tr"}, or \code{"qn_polish"} — which
-subproblem solver was active at termination
-\item \code{ridge_switches}: Integer count of cubic->TR switches (0 or 1 in v1,
-the switch is one-way)
-\item \code{radius_final}: Final trust-region radius (\code{NA} if the solver never
-switched to TR mode)
-\item \code{qn_polish_switches}: Integer count of cubic->qn_polish transitions
-(bidirectional; may be > 1 if the solver reverts and re-fires)
-\item \code{qn_polish_reverts}: Integer count of qn_polish->cubic reversions
-\item \code{hess_evals_at_polish_switch}: Value of \code{evaluations$hess} at the
-first qn_polish switch; users can compare against the final
-\code{evaluations$hess} to quantify Hessian-evaluation savings
+\item \code{par}: Optimal parameter vector.
+\item \code{value}: Objective value at \code{par}.
+\item \code{gradient}: Gradient at \code{par}.
+\item \code{hessian}: Hessian at \code{par} (or the final BFGS approximation if the
+run ended in qn_polish mode).
+\item \code{sigma}: Final cubic regularization parameter.
+\item \code{converged}: Logical; whether convergence criteria were met.
+\item \code{iterations}: Number of iterations performed.
+\item \code{evaluations}: Named list of \code{fn}, \code{gr}, and \code{hess} evaluation counts.
+\item \code{message}: Convergence reason.
+\item \code{trace}: Per-iteration trace data (depth controlled by
+\code{control$trace}); \code{NULL} when \code{trace = 0}.
+\item \code{diagnostics}: Sublist of internal mode-dispatch diagnostics —
+\code{solver_mode_final}, \code{ridge_switches}, \code{radius_final},
+\code{qn_polish_switches}, \code{qn_polish_reverts}, and
+\code{hess_evals_at_polish_switch}. See \verb{\link{arcopt_advanced_controls}}
+for the meaning of each field. Most users do not need to inspect
+this; it is preserved for diagnostic and benchmarking use.
 }
 }
 \description{
@@ -69,129 +99,20 @@ and indefinite Hessian problems common in statistical applications.
 }
 \details{
 The ARC algorithm iteratively minimizes a cubic regularization model:
-\deqn{m_k(s) = f_k + g_k^T s + \frac{1}{2} s^T H_k s + \frac{\sigma_k}{3} \|s\|^3}
-
-where \eqn{\sigma_k} is adaptively adjusted based on model accuracy.
+\deqn{m_k(s) = f_k + g_k^\top s + \frac{1}{2} s^\top H_k s +
+  \frac{\sigma_k}{3} \|s\|^3}
+where \eqn{\sigma_k} is adapted from observed model accuracy. arcopt
+may transparently fall back to a trust-region subproblem in flat-ridge
+regimes and (optionally, opt-in) to a line-search BFGS polish in the
+quadratic attraction basin. The transitions are observable via
+\code{result$diagnostics}; the algorithmic details and tunable thresholds
+are documented under \verb{\link{arcopt_advanced_controls}}.
 \subsection{Hessian Requirement}{
 
-ARC critically depends on accurate curvature information. The \code{hess} argument
-is required. For convenience, finite-difference Hessians can be computed
-automatically with \code{control$use_fd = TRUE}, but analytic Hessians are
-strongly recommended for best performance.
-}
-
-\subsection{Control Parameters}{
-
-The \code{control} list accepts:
-\itemize{
-\item \code{maxit}: Maximum iterations (default: 1000)
-\item \code{ftol_abs}: Absolute function tolerance (default: 1e-8)
-\item \code{gtol_abs}: Absolute gradient norm tolerance (default: 1e-5)
-\item \code{xtol_abs}: Absolute step size tolerance (default: 1e-8)
-\item \code{sigma0}: Initial regularization parameter (default: 1.0)
-\item \code{eta1}: Acceptance threshold for step (default: 0.1)
-\item \code{eta2}: Very successful step threshold (default: 0.9)
-\item \code{gamma1}: Regularization decrease factor (default: 0.5)
-\item \code{gamma2}: Regularization increase factor (default: 2.0)
-\item \code{cubic_solver}: Solver selection: "auto" (recommended) or "eigen"
-(default: "auto"). Auto-selection uses eigendecomposition (Algorithm 5a) for
-robust handling of indefinite Hessians and hard cases.
-\item \code{use_momentum}: Enable momentum acceleration (default: FALSE).
-Implements Gao et al. (2022) ARCm with recursive momentum and bisection
-search for monotonicity. \strong{Only recommended for known ill-conditioned
-problems} - on well-conditioned problems, the bisection overhead may
-negate iteration savings. Empirically shows mixed results: can dramatically
-reduce iterations on some problems while increasing them on others.
-\item \code{momentum_tau}: Maximum momentum parameter (default: 0.5, Gao's τ)
-\item \code{momentum_alpha1}: Linear step scaling constant (default: 0.1, Gao's α₁)
-\item \code{momentum_alpha2}: Quadratic step scaling constant (default: 1.0, Gao's α₂)
-\item \code{trace}: Print iteration progress (default: FALSE)
-\item \code{use_qn}: Use quasi-Newton Hessian approximation (default: FALSE).
-When TRUE, routes to arcopt_qn which uses QN updates instead of exact
-Hessians. See \code{qn_method} for available QN methods.
-\item \code{qn_method}: QN update method - "sr1", "bfgs", "lbfgs", "lsr1"
-(default: "sr1"). Only used when \code{use_qn = TRUE}.
-}
-}
-
-\subsection{Trust-Region Fallback (Flat-Ridge Detector)}{
-
-Cubic regularization can stagnate in "flat-ridge" regimes — iterations
-with the regularization floor pinned, model predictions matching the
-objective (rho approx 1), gradient stalling, and a Hessian that is
-positive-definite but nearly singular. This behavior is outside the
-local-error-bound condition of Yue, Zhou & So (2018) under which
-cubic regularization is guaranteed to converge quadratically at
-degenerate minimizers. In those regimes, arcopt can switch (once) from
-the cubic subproblem to a trust-region subproblem, which places a hard
-step-norm constraint instead of a cubic penalty and is more effective
-at walking off near-singular ridges.
-\itemize{
-\item \code{tr_fallback_enabled}: Enable the one-way cubic->TR switch
-(default: \code{TRUE}).
-\item \code{tr_fallback_window}: Sliding-window length for the detector
-(default: \code{10}).
-\item \code{tr_fallback_tol_ridge}: \code{lambda_min} threshold defining a
-"near-singular PD" Hessian (default: \code{1e-3}).
-\item \code{tr_fallback_rho_tol}: Tolerance on \verb{|rho - 1|} for the
-"near-perfect model" signal (default: \code{0.1}).
-\item \code{tr_fallback_grad_decrease_max}: Ratio of latest to oldest
-\verb{||g||_inf} above which the gradient counts as stagnant
-(default: \code{0.9}).
-\item \code{tr_fallback_g_inf_floor}: Absolute lower bound on \verb{||g||_inf};
-the switch will not fire below this value so the hybrid does not
-trigger at true local minima (default: \code{1e-6}).
-\item \code{tr_rmax}: Maximum trust-region radius (default: \code{1e6}).
-\item \code{tr_eta1}: TR step-acceptance threshold (default: \code{0.25}).
-\item \code{tr_eta2}: TR expansion threshold (default: \code{0.75}).
-\item \code{tr_gamma_shrink}: Radius shrink factor on a poor step
-(default: \code{0.25}).
-\item \code{tr_gamma_grow}: Radius grow factor on a very good boundary step
-(default: \code{2.0}).
-}
-}
-
-\subsection{QN-Polish Fallback (Healthy-Basin Detector)}{
-
-Once the iterate has entered the quadratic attraction basin of a strict
-local minimum, the cubic regularization penalty has decayed to its floor
-and contributes negligible damping, but arcopt still evaluates the
-user-supplied \code{hess()} at every iteration. For expensive Hessians (AD
-via Stan, finite-difference), this per-iteration cost dominates
-wall-clock time in the polish phase. The \code{qn_polish} mode replaces
-the cubic subproblem with a Wolfe line search along the BFGS-approximated
-Newton direction, skipping further \code{hess()} calls until convergence.
-The switch is bidirectional: if the BFGS approximation drifts or the
-line search fails repeatedly, arcopt reverts to cubic mode with a
-cooldown to prevent ping-ponging.
-\itemize{
-\item \code{qn_polish_enabled}: Enable the cubic <-> qn_polish bidirectional
-switch (default: \code{FALSE} in v1; will be flipped after broader
-benchmark evidence).
-\item \code{qn_polish_window}: Sliding-window length for the healthy-basin
-detector (default: \code{5}; shorter than the TR-fallback window because
-the basin signal is stronger).
-\item \code{qn_polish_rho}: Minimum \code{rho_k} required throughout the window
-(default: \code{0.9}).
-\item \code{qn_polish_lambda_min}: Minimum \code{lambda_min(H_k)} required (strictly
-positive, not just PD) throughout the window (default: \code{1e-3}).
-\item \code{qn_polish_g_decay}: Maximum ratio of consecutive \verb{||g||_inf} values;
-e.g., \code{0.5} requires 2x-per-iteration contraction (default: \code{0.5}).
-\item \code{qn_polish_g_inf_floor}: Absolute lower bound on \verb{||g||_inf} at
-window start; prevents firing at convergence (default: \code{1e-8}).
-\item \code{qn_polish_c1}, \code{qn_polish_c2}: Wolfe line-search constants
-(defaults \code{1e-4} and \code{0.9}).
-\item \code{qn_polish_alpha_max}: Initial step length tried by the line search
-(default: \code{1.0}, matching the BFGS convention).
-\item \code{qn_polish_max_ls_iter}: Maximum line-search evaluations per
-iteration (default: \code{20}).
-\item \code{qn_polish_max_fail}: Consecutive line-search failures that trigger
-a revert to cubic mode (default: \code{3}).
-\item \code{qn_polish_reenter_delay}: Cubic iterations required after a revert
-before qn_polish may re-fire (default: \code{5}).
-\item \code{qn_polish_curv_eps}: Curvature threshold for skipping BFGS updates
-to preserve PD of the approximation (default: \code{1e-10}).
-}
+arcopt is Hessian-centric: an analytic \code{hess} function is strongly
+recommended. If the analytic form is unavailable, set
+\code{control$use_qn = TRUE} to obtain Hessian-free quasi-Newton updates
+(see the advanced-controls page).
 }
 }
 \examples{
@@ -221,4 +142,9 @@ result <- arcopt(
 print(result$par)      # Should be near c(1, 1)
 print(result$value)    # Should be near 0
 }
+}
+\seealso{
+\code{\link{arcopt_advanced_controls}} for advanced tuning of
+the cubic regularization, trust-region fallback, and quasi-Newton
+polish mode.
 }

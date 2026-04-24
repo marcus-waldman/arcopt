@@ -66,11 +66,11 @@ if (!is.null(fit$error)) {
   log_line(sprintf("iterations:        %d", fit$iterations))
   log_line(sprintf("eig_min:           %+.3e", eig_min))
   log_line(sprintf("status:            %s", status))
-  log_line(sprintf("solver_mode_final: %s", fit$solver_mode_final))
-  log_line(sprintf("ridge_switches:    %d", fit$ridge_switches))
+  log_line(sprintf("solver_mode_final: %s", fit$diagnostics$solver_mode_final))
+  log_line(sprintf("ridge_switches:    %d", fit$diagnostics$ridge_switches))
   log_line(sprintf("radius_final:      %s",
-                   if (is.na(fit$radius_final)) "NA"
-                   else sprintf("%.3e", fit$radius_final)))
+                   if (is.na(fit$diagnostics$radius_final)) "NA"
+                   else sprintf("%.3e", fit$diagnostics$radius_final)))
   log_line(sprintf("converged:         %s", fit$converged))
   log_line(sprintf("message:           %s", fit$message))
 }

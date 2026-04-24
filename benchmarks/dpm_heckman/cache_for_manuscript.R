@@ -41,13 +41,14 @@ run_one <- function(optimizer) {
                                hessian = fns$hess_ad(p))
     r <- trust::trust(objfun, x0, rinit = 1, rmax = 100, iterlim = maxit)
     list(par = r$argument, value = r$value, iterations = r$iterations,
-         gradient = fns$gr(r$argument), solver_mode_final = NA_character_,
-         ridge_switches = NA_integer_)
-  } else if (identical(optimizer, "arcopt-nohybrid")) {
+         gradient = fns$gr(r$argument),
+         diagnostics = list(solver_mode_final = NA_character_,
+                            ridge_switches = NA_integer_))
+  } else if (identical(optimizer, "arcopt-cubic-only")) {
     arcopt::arcopt(x0 = x0, fn = fns$fn, gr = fns$gr, hess = fns$hess_ad,
                    control = list(maxit = maxit, gtol_abs = gtol, trace = 0L,
                                   tr_fallback_enabled = FALSE))
-  } else if (identical(optimizer, "arcopt-hybrid")) {
+  } else if (identical(optimizer, "arcopt-default")) {
     arcopt::arcopt(x0 = x0, fn = fns$fn, gr = fns$gr, hess = fns$hess_ad,
                    control = list(maxit = maxit, gtol_abs = gtol, trace = 0L,
                                   tr_fallback_enabled = TRUE))
@@ -61,16 +62,16 @@ run_one <- function(optimizer) {
        iter = fit$iterations,
        time_s = elapsed,
        eig_min = eig_min,
-       mode = fit$solver_mode_final,
-       switches = fit$ridge_switches)
+       mode = fit$diagnostics$solver_mode_final,
+       switches = fit$diagnostics$ridge_switches)
 }
 
 cat("[cache] running trust...\n")
 res_trust    <- run_one("trust")
-cat("[cache] running arcopt-nohybrid...\n")
-res_nohybrid <- run_one("arcopt-nohybrid")
-cat("[cache] running arcopt-hybrid...\n")
-res_hybrid   <- run_one("arcopt-hybrid")
+cat("[cache] running arcopt-cubic-only...\n")
+res_nohybrid <- run_one("arcopt-cubic-only")
+cat("[cache] running arcopt-default...\n")
+res_hybrid   <- run_one("arcopt-default")
 
 results <- list(
   meta = list(seed = seed, maxit = maxit, gtol = gtol,

@@ -1,3 +1,56 @@
+# arcopt 0.2.0 (development) — user-experience overhaul
+
+This release reduces the user-facing control surface and the return-list
+clutter without changing default optimization behavior on any tested
+problem. The `arcopt(x0, fn, gr, hess)` core signature is unchanged.
+
+## Tiered control surface
+
+* The `?arcopt` help page now documents only the seven Tier 1 controls:
+  `maxit`, `gtol_abs`, `ftol_abs`, `xtol_abs`, `trace`, `verbose`,
+  and `use_qn`. All other tunable parameters are documented on a new
+  `?arcopt_advanced_controls` topic, organized by subsystem (cubic
+  regularization, trust-region fallback, quasi-Newton polish,
+  quasi-Newton variant). They remain settable via `control = list(...)`
+  exactly as before.
+
+* New `verbose = FALSE` Tier 1 control: when `TRUE`, prints one line per
+  iteration to the console (`iter`, `f`, `||g||_inf`, `rho`,
+  regularization scale, mode). Orthogonal to `trace`, which still
+  controls the depth of data captured into `result$trace`.
+
+* `arcopt_qn()` is no longer publicly exported. It remains an internal
+  function reachable via `control$use_qn = TRUE` from the main
+  `arcopt()` entry point. The internal documentation is still browsable
+  via `?arcopt_qn`.
+
+## Diagnostics nesting (breaking change)
+
+* The mode-dispatch diagnostic fields previously returned at the top
+  level of the result list — `solver_mode_final`, `ridge_switches`,
+  `radius_final`, `qn_polish_switches`, `qn_polish_reverts`, and
+  `hess_evals_at_polish_switch` — are now nested under
+  `result$diagnostics`. Update downstream code from
+  `result$solver_mode_final` to `result$diagnostics$solver_mode_final`,
+  etc.
+
+* `arcopt_qn()` runs additionally place `qn_updates`, `qn_skips`,
+  `qn_restarts`, and `qn_fd_refreshes` inside the same `diagnostics`
+  sublist (previously top-level).
+
+## Removed controls
+
+* `use_momentum`, `momentum_tau`, `momentum_alpha1`, `momentum_alpha2`
+  and the associated bisection-search code (~70 LOC of Gao et al. 2022
+  ARCm) have been removed. The mechanism showed mixed empirical results
+  in our test suite and was off by default. If you need it, recover the
+  v0.1.1 implementation from git history.
+
+* `cubic_solver` is no longer accepted as a documented control. The
+  internal dispatcher always selects the eigendecomposition solver
+  (Algorithm 5a). The dispatcher itself is preserved as an internal
+  extensibility hook for the deferred large-scale Algorithm 5b.
+
 # arcopt 0.1.1 (development)
 
 ## QN-polish fallback for the strongly-convex basin

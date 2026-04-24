@@ -5,158 +5,91 @@
 #' and indefinite Hessian problems common in statistical applications.
 #'
 #' @param x0 Numeric vector of initial parameter values (length Q).
-#' @param fn Function that computes the objective function value. Should take a
-#'   numeric vector of length Q and return a scalar.
-#' @param gr Function that computes the gradient. Should take a numeric vector
-#'   of length Q and return a numeric vector of length Q. Required.
-#' @param hess Function that computes the Hessian matrix. Should take a numeric
-#'   vector of length Q and return a Q×Q symmetric matrix. Required.
+#' @param fn Function that computes the objective function value. Should take
+#'   a numeric vector of length Q and return a scalar.
+#' @param gr Function that computes the gradient. Should take a numeric
+#'   vector of length Q and return a numeric vector of length Q. Required.
+#' @param hess Function that computes the Hessian matrix. Should take a
+#'   numeric vector of length Q and return a Q-by-Q symmetric matrix.
+#'   Required (unless `control$use_qn = TRUE`; see Details).
 #' @param ... Additional arguments passed to `fn`, `gr`, and `hess`.
 #' @param lower Numeric vector of lower bounds (length Q). Use `-Inf` for
 #'   unbounded parameters. Default: all `-Inf`.
 #' @param upper Numeric vector of upper bounds (length Q). Use `Inf` for
 #'   unbounded parameters. Default: all `Inf`.
-#' @param control List of control parameters (see Details).
+#' @param control A named list of control parameters. The user-facing
+#'   tolerances and switches are documented below; advanced regularization
+#'   tuning, the trust-region fallback, and the quasi-Newton polish mode
+#'   live on a separate help page (see `\link{arcopt_advanced_controls}`).
+#'   Recognized entries:
+#'   \describe{
+#'     \item{`maxit`}{Maximum number of iterations (default `1000`).}
+#'     \item{`gtol_abs`}{Absolute gradient-norm tolerance for convergence
+#'       (default `1e-5`).}
+#'     \item{`ftol_abs`}{Absolute objective-value tolerance (default
+#'       `1e-8`).}
+#'     \item{`xtol_abs`}{Absolute step-size tolerance (default `1e-8`).}
+#'     \item{`trace`}{Integer in `0:3`. Depth of per-iteration data captured
+#'       into `result$trace`: `0` collects nothing, `1` (the default)
+#'       collects function value and gradient norm, `2` adds sigma, rho,
+#'       step type and reciprocal Hessian condition number, `3` adds the
+#'       full iterate, step, Hessian and convergence-criterion record.
+#'       This flag controls *saved* data only — for live console output
+#'       see `verbose`.}
+#'     \item{`verbose`}{Logical. If `TRUE`, prints one line per iteration
+#'       to the console showing iteration number, objective value,
+#'       `||g||_inf`, ratio rho, regularization scale, and active solver
+#'       mode (default `FALSE`). Orthogonal to `trace`.}
+#'     \item{`use_qn`}{Logical. If `TRUE`, route to the quasi-Newton ARC
+#'       variant, which approximates the Hessian via SR1/BFGS updates and
+#'       does not require an analytic `hess` function. See the
+#'       advanced-controls page for QN-specific parameters (default
+#'       `FALSE`).}
+#'   }
+#'   See `\link{arcopt_advanced_controls}` for the full set of advanced
+#'   tuning parameters governing the cubic regularization, the trust-region
+#'   fallback, and the quasi-Newton polish mode.
 #'
 #' @details
 #' The ARC algorithm iteratively minimizes a cubic regularization model:
-#' \deqn{m_k(s) = f_k + g_k^T s + \frac{1}{2} s^T H_k s + \frac{\sigma_k}{3} \|s\|^3}
-#'
-#' where \eqn{\sigma_k} is adaptively adjusted based on model accuracy.
+#' \deqn{m_k(s) = f_k + g_k^\top s + \frac{1}{2} s^\top H_k s +
+#'   \frac{\sigma_k}{3} \|s\|^3}
+#' where \eqn{\sigma_k} is adapted from observed model accuracy. arcopt
+#' may transparently fall back to a trust-region subproblem in flat-ridge
+#' regimes and (optionally, opt-in) to a line-search BFGS polish in the
+#' quadratic attraction basin. The transitions are observable via
+#' `result$diagnostics`; the algorithmic details and tunable thresholds
+#' are documented under `\link{arcopt_advanced_controls}`.
 #'
 #' ## Hessian Requirement
-#' ARC critically depends on accurate curvature information. The `hess` argument
-#' is required. For convenience, finite-difference Hessians can be computed
-#' automatically with `control$use_fd = TRUE`, but analytic Hessians are
-#' strongly recommended for best performance.
-#'
-#' ## Control Parameters
-#' The `control` list accepts:
-#' * `maxit`: Maximum iterations (default: 1000)
-#' * `ftol_abs`: Absolute function tolerance (default: 1e-8)
-#' * `gtol_abs`: Absolute gradient norm tolerance (default: 1e-5)
-#' * `xtol_abs`: Absolute step size tolerance (default: 1e-8)
-#' * `sigma0`: Initial regularization parameter (default: 1.0)
-#' * `eta1`: Acceptance threshold for step (default: 0.1)
-#' * `eta2`: Very successful step threshold (default: 0.9)
-#' * `gamma1`: Regularization decrease factor (default: 0.5)
-#' * `gamma2`: Regularization increase factor (default: 2.0)
-#' * `cubic_solver`: Solver selection: "auto" (recommended) or "eigen"
-#'   (default: "auto"). Auto-selection uses eigendecomposition (Algorithm 5a) for
-#'   robust handling of indefinite Hessians and hard cases.
-#' * `use_momentum`: Enable momentum acceleration (default: FALSE).
-#'   Implements Gao et al. (2022) ARCm with recursive momentum and bisection
-#'   search for monotonicity. **Only recommended for known ill-conditioned
-#'   problems** - on well-conditioned problems, the bisection overhead may
-#'   negate iteration savings. Empirically shows mixed results: can dramatically
-#'   reduce iterations on some problems while increasing them on others.
-#' * `momentum_tau`: Maximum momentum parameter (default: 0.5, Gao's τ)
-#' * `momentum_alpha1`: Linear step scaling constant (default: 0.1, Gao's α₁)
-#' * `momentum_alpha2`: Quadratic step scaling constant (default: 1.0, Gao's α₂)
-#' * `trace`: Print iteration progress (default: FALSE)
-#' * `use_qn`: Use quasi-Newton Hessian approximation (default: FALSE).
-#'   When TRUE, routes to arcopt_qn which uses QN updates instead of exact
-#'   Hessians. See `qn_method` for available QN methods.
-#' * `qn_method`: QN update method - "sr1", "bfgs", "lbfgs", "lsr1"
-#'   (default: "sr1"). Only used when `use_qn = TRUE`.
-#'
-#' ## Trust-Region Fallback (Flat-Ridge Detector)
-#'
-#' Cubic regularization can stagnate in "flat-ridge" regimes — iterations
-#' with the regularization floor pinned, model predictions matching the
-#' objective (rho approx 1), gradient stalling, and a Hessian that is
-#' positive-definite but nearly singular. This behavior is outside the
-#' local-error-bound condition of Yue, Zhou & So (2018) under which
-#' cubic regularization is guaranteed to converge quadratically at
-#' degenerate minimizers. In those regimes, arcopt can switch (once) from
-#' the cubic subproblem to a trust-region subproblem, which places a hard
-#' step-norm constraint instead of a cubic penalty and is more effective
-#' at walking off near-singular ridges.
-#'
-#' * `tr_fallback_enabled`: Enable the one-way cubic->TR switch
-#'   (default: `TRUE`).
-#' * `tr_fallback_window`: Sliding-window length for the detector
-#'   (default: `10`).
-#' * `tr_fallback_tol_ridge`: `lambda_min` threshold defining a
-#'   "near-singular PD" Hessian (default: `1e-3`).
-#' * `tr_fallback_rho_tol`: Tolerance on `|rho - 1|` for the
-#'   "near-perfect model" signal (default: `0.1`).
-#' * `tr_fallback_grad_decrease_max`: Ratio of latest to oldest
-#'   `||g||_inf` above which the gradient counts as stagnant
-#'   (default: `0.9`).
-#' * `tr_fallback_g_inf_floor`: Absolute lower bound on `||g||_inf`;
-#'   the switch will not fire below this value so the hybrid does not
-#'   trigger at true local minima (default: `1e-6`).
-#' * `tr_rmax`: Maximum trust-region radius (default: `1e6`).
-#' * `tr_eta1`: TR step-acceptance threshold (default: `0.25`).
-#' * `tr_eta2`: TR expansion threshold (default: `0.75`).
-#' * `tr_gamma_shrink`: Radius shrink factor on a poor step
-#'   (default: `0.25`).
-#' * `tr_gamma_grow`: Radius grow factor on a very good boundary step
-#'   (default: `2.0`).
-#'
-#' ## QN-Polish Fallback (Healthy-Basin Detector)
-#'
-#' Once the iterate has entered the quadratic attraction basin of a strict
-#' local minimum, the cubic regularization penalty has decayed to its floor
-#' and contributes negligible damping, but arcopt still evaluates the
-#' user-supplied `hess()` at every iteration. For expensive Hessians (AD
-#' via Stan, finite-difference), this per-iteration cost dominates
-#' wall-clock time in the polish phase. The `qn_polish` mode replaces
-#' the cubic subproblem with a Wolfe line search along the BFGS-approximated
-#' Newton direction, skipping further `hess()` calls until convergence.
-#' The switch is bidirectional: if the BFGS approximation drifts or the
-#' line search fails repeatedly, arcopt reverts to cubic mode with a
-#' cooldown to prevent ping-ponging.
-#'
-#' * `qn_polish_enabled`: Enable the cubic <-> qn_polish bidirectional
-#'   switch (default: `FALSE` in v1; will be flipped after broader
-#'   benchmark evidence).
-#' * `qn_polish_window`: Sliding-window length for the healthy-basin
-#'   detector (default: `5`; shorter than the TR-fallback window because
-#'   the basin signal is stronger).
-#' * `qn_polish_rho`: Minimum `rho_k` required throughout the window
-#'   (default: `0.9`).
-#' * `qn_polish_lambda_min`: Minimum `lambda_min(H_k)` required (strictly
-#'   positive, not just PD) throughout the window (default: `1e-3`).
-#' * `qn_polish_g_decay`: Maximum ratio of consecutive `||g||_inf` values;
-#'   e.g., `0.5` requires 2x-per-iteration contraction (default: `0.5`).
-#' * `qn_polish_g_inf_floor`: Absolute lower bound on `||g||_inf` at
-#'   window start; prevents firing at convergence (default: `1e-8`).
-#' * `qn_polish_c1`, `qn_polish_c2`: Wolfe line-search constants
-#'   (defaults `1e-4` and `0.9`).
-#' * `qn_polish_alpha_max`: Initial step length tried by the line search
-#'   (default: `1.0`, matching the BFGS convention).
-#' * `qn_polish_max_ls_iter`: Maximum line-search evaluations per
-#'   iteration (default: `20`).
-#' * `qn_polish_max_fail`: Consecutive line-search failures that trigger
-#'   a revert to cubic mode (default: `3`).
-#' * `qn_polish_reenter_delay`: Cubic iterations required after a revert
-#'   before qn_polish may re-fire (default: `5`).
-#' * `qn_polish_curv_eps`: Curvature threshold for skipping BFGS updates
-#'   to preserve PD of the approximation (default: `1e-10`).
+#' arcopt is Hessian-centric: an analytic `hess` function is strongly
+#' recommended. If the analytic form is unavailable, set
+#' `control$use_qn = TRUE` to obtain Hessian-free quasi-Newton updates
+#' (see the advanced-controls page).
 #'
 #' @return A list with components:
-#' * `par`: Optimal parameter vector
-#' * `value`: Optimal function value
-#' * `gradient`: Gradient at optimum
-#' * `hessian`: Hessian at optimum (if `hess` provided)
-#' * `converged`: Logical, whether convergence criteria met
-#' * `iterations`: Number of iterations performed
-#' * `evaluations`: List with `fn`, `gr`, and `hess` evaluation counts
-#' * `message`: Convergence message
-#' * `solver_mode_final`: `"cubic"`, `"tr"`, or `"qn_polish"` — which
-#'   subproblem solver was active at termination
-#' * `ridge_switches`: Integer count of cubic->TR switches (0 or 1 in v1,
-#'   the switch is one-way)
-#' * `radius_final`: Final trust-region radius (`NA` if the solver never
-#'   switched to TR mode)
-#' * `qn_polish_switches`: Integer count of cubic->qn_polish transitions
-#'   (bidirectional; may be > 1 if the solver reverts and re-fires)
-#' * `qn_polish_reverts`: Integer count of qn_polish->cubic reversions
-#' * `hess_evals_at_polish_switch`: Value of `evaluations$hess` at the
-#'   first qn_polish switch; users can compare against the final
-#'   `evaluations$hess` to quantify Hessian-evaluation savings
+#' * `par`: Optimal parameter vector.
+#' * `value`: Objective value at `par`.
+#' * `gradient`: Gradient at `par`.
+#' * `hessian`: Hessian at `par` (or the final BFGS approximation if the
+#'   run ended in qn_polish mode).
+#' * `sigma`: Final cubic regularization parameter.
+#' * `converged`: Logical; whether convergence criteria were met.
+#' * `iterations`: Number of iterations performed.
+#' * `evaluations`: Named list of `fn`, `gr`, and `hess` evaluation counts.
+#' * `message`: Convergence reason.
+#' * `trace`: Per-iteration trace data (depth controlled by
+#'   `control$trace`); `NULL` when `trace = 0`.
+#' * `diagnostics`: Sublist of internal mode-dispatch diagnostics —
+#'   `solver_mode_final`, `ridge_switches`, `radius_final`,
+#'   `qn_polish_switches`, `qn_polish_reverts`, and
+#'   `hess_evals_at_polish_switch`. See `\link{arcopt_advanced_controls}`
+#'   for the meaning of each field. Most users do not need to inspect
+#'   this; it is preserved for diagnostic and benchmarking use.
+#'
+#' @seealso \code{\link{arcopt_advanced_controls}} for advanced tuning of
+#'   the cubic regularization, trust-region fallback, and quasi-Newton
+#'   polish mode.
 #'
 #' @importFrom utils modifyList
 #' @export
@@ -221,12 +154,19 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
                      lower = lower, upper = upper, control = control))
   }
 
-  # Default control parameters
+  # Default control parameters. The user-facing "tier 1" entries
+  # (tolerances, trace, verbose, use_qn) are documented in ?arcopt; the
+  # advanced regularization, trust-region, and qn-polish entries are
+  # documented under ?arcopt_advanced_controls.
   control_defaults <- list(
+    # Tier 1: tolerances and switches
     maxit = 1000,
-    ftol_abs = 1e-8,
     gtol_abs = 1e-5,
+    ftol_abs = 1e-8,
     xtol_abs = 1e-8,
+    trace = 1,
+    verbose = FALSE,
+    # Tier 2: cubic-regularization tuning
     sigma0 = 1.0,
     sigma_min = 1e-6,
     sigma_max = 1e12,
@@ -234,12 +174,7 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
     eta2 = 0.9,
     gamma1 = 0.5,
     gamma2 = 2.0,
-    cubic_solver = "auto",
-    use_momentum = FALSE,
-    momentum_tau = 0.5,
-    momentum_alpha1 = 0.1,
-    momentum_alpha2 = 1.0,
-    # Trust-region fallback (cubic -> TR on flat-ridge detection)
+    # Tier 2: trust-region fallback (cubic -> TR on flat-ridge detection)
     tr_fallback_enabled = TRUE,
     tr_fallback_window = 10,
     tr_fallback_tol_ridge = 1e-3,
@@ -252,9 +187,9 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
     tr_eta2 = 0.75,
     tr_gamma_shrink = 0.25,
     tr_gamma_grow = 2.0,
-    # QN-polish fallback (cubic -> line-search BFGS once we enter the
-    # quadratic attraction basin). Avoids Hessian recomputation in the
-    # final convergence phase.
+    # Tier 2: qn-polish fallback (cubic <-> line-search BFGS once inside
+    # the quadratic attraction basin). Off by default in v0.2.0; enable
+    # via control$qn_polish_enabled = TRUE for expensive-Hessian problems.
     qn_polish_enabled = FALSE,
     qn_polish_window = 5,
     qn_polish_rho = 0.9,
@@ -267,8 +202,7 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
     qn_polish_max_ls_iter = 20,
     qn_polish_max_fail = 3,
     qn_polish_reenter_delay = 5,
-    qn_polish_curv_eps = 1e-10,
-    trace = 1
+    qn_polish_curv_eps = 1e-10
   )
 
   control <- modifyList(control_defaults, control)
@@ -289,10 +223,6 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
   step_norms <- numeric(0)
   f_values <- numeric(0)
   already_refreshed <- FALSE
-
-  # Momentum state (Gao et al. Algorithm 1)
-  # v_prev initialized to zero vector per Gao: v_{-1} = 0
-  v_prev <- rep(0, length(x0))
 
   # Trust-region fallback state (one-way switch cubic -> tr)
   solver_mode <- "cubic"
@@ -365,9 +295,6 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
       trace_data$s <- matrix(NA_real_, nrow = 0, ncol = n)
       trace_data$H <- array(NA_real_, dim = c(0, n, n))
       trace_data$converge_criteria <- list()
-      if (control$use_momentum) {
-        trace_data$beta <- numeric(0)
-      }
     }
   }
 
@@ -665,16 +592,9 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
               stop("NaN or Inf detected in gradient at accepted Newton point")
             }
 
-            # Newton steps do NOT use momentum - they are already optimal for
-            # the local quadratic model. Adding momentum would push past the
-            # computed Newton solution and could cause oscillation.
             x_current <- y_new
             f_current <- f_new
             g_current <- g_new
-
-            # Reset momentum state after Newton step - Newton is optimal for local
-            # quadratic model, so accumulated cubic momentum direction is stale
-            v_prev <- rep(0, length(x_current))
 
             h_current <- hess(x_current, ...)
             hess_evals <- hess_evals + 1
@@ -709,12 +629,12 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
 
     # STEP 3: If Newton failed/skipped, use cubic solver
     if (!used_newton) {
-      # Solve cubic subproblem using dispatcher
+      # Solve cubic subproblem via the (internal) dispatcher; "auto"
+      # currently always selects the eigendecomposition solver.
       cubic_result <- solve_cubic_subproblem_dispatch(
         g = g_current,
         H = h_current,
-        sigma = sigma_current,
-        solver = control$cubic_solver
+        sigma = sigma_current
       )
 
       s_current <- cubic_result$s
@@ -748,102 +668,23 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
         x_previous <- x_current
         f_previous <- f_current
 
-        # Trial point before momentum
-        y_new <- x_trial
-        f_new <- f_trial
-        g_new <- gr(y_new, ...)
+        x_current <- x_trial
+        f_current <- f_trial
+        g_current <- gr(x_current, ...)
         gr_evals <- gr_evals + 1
 
-        # Check for NaN/Inf in new gradient
-        if (!check_finite(f_new, g_new)) {
+        if (!check_finite(f_current, g_current)) {
           stop("NaN or Inf detected in gradient at accepted point")
-        }
-
-        # Apply momentum if enabled (Gao et al. Algorithm 1)
-        if (control$use_momentum) {
-          # Compute beta_k upper bound: beta ∈ [0, min{τ, α1||s||, α2||s||²}]
-          s_norm <- sqrt(sum(s_current^2))
-          beta_upper <- min(
-            control$momentum_tau,
-            control$momentum_alpha1 * s_norm,
-            control$momentum_alpha2 * s_norm^2
-          )
-
-          # Initialize with beta=0 fallback (no momentum = just cubic step)
-          v_current <- s_current
-          x_current <- y_new
-          f_current <- f_new
-
-          # Bisection search for largest beta_k satisfying f(x_k + v_k) <= f(y_{k+1})
-          # where v_k = beta * v_{k-1} + s_k
-          f_target <- f_new  # f(y_{k+1}) = f(x_k + s_k)
-
-          # Try beta_upper first (greedy)
-          # v_k = beta * v_{k-1} + s_k, and x_{k+1} = x_k + v_k
-          # Simplified: x_{k+1} = y_{k+1} + beta * v_{k-1} (since y_{k+1} = x_k + s_k)
-          v_trial <- beta_upper * v_prev + s_current
-          z_trial <- y_new + beta_upper * v_prev
-          f_trial <- fn(z_trial, ...)
-          fn_evals <- fn_evals + 1
-
-          if (check_finite(f_trial, rep(0, length(z_trial))) && f_trial <= f_target) {
-            # Accept beta_upper
-            v_current <- v_trial
-            x_current <- z_trial
-            f_current <- f_trial
-          } else if (beta_upper > 1e-10) {
-            # Bisection search for valid beta
-            beta_low <- 0
-            beta_high <- beta_upper
-            max_bisect <- 10
-
-            for (i in seq_len(max_bisect)) {
-              beta_mid <- (beta_low + beta_high) / 2
-              v_trial <- beta_mid * v_prev + s_current
-              z_trial <- y_new + beta_mid * v_prev
-              f_trial <- fn(z_trial, ...)
-              fn_evals <- fn_evals + 1
-
-              if (check_finite(f_trial, rep(0, length(z_trial))) && f_trial <= f_target) {
-                # Valid beta found - update best solution
-                beta_low <- beta_mid
-                v_current <- v_trial
-                x_current <- z_trial
-                f_current <- f_trial
-              } else {
-                beta_high <- beta_mid
-              }
-
-              if (beta_high - beta_low < 1e-6) break
-            }
-            # If no valid beta found, we keep the beta=0 fallback initialized above
-          }
-
-          # Update momentum vector for next iteration
-          v_prev <- v_current
-
-          # Evaluate gradient at accepted point
-          g_current <- gr(x_current, ...)
-          gr_evals <- gr_evals + 1
-        } else {
-          # No momentum: x_{k+1} = y_{k+1}
-          x_current <- y_new
-          f_current <- f_new
-          g_current <- g_new
         }
 
         h_current <- hess(x_current, ...)
         hess_evals <- hess_evals + 1
 
-        # Track step norm and function value for stagnation detection
         step_norms <- c(step_norms, sqrt(sum(s_current^2)))
         f_values <- c(f_values, f_current)
 
         prev_rejected <- FALSE
       } else {
-        # Reject step - keep current point, will re-solve with updated sigma
-        # IMPORTANT: Do NOT update v_prev on rejected steps (Gao Algorithm 1)
-        # Next iteration will use the SAME v_prev (momentum carries forward unchanged)
         prev_rejected <- TRUE
       }
 
@@ -1004,17 +845,6 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
             abs(f_current - f_previous) / pmax(abs(f_current), 1)
           }
         )
-
-        # Beta (if momentum enabled)
-        if (control$use_momentum) {
-          # Try to extract beta_low from parent environment if it exists
-          beta_val <- if (iter == 0 || !exists("beta_low", inherits = FALSE)) {
-            0
-          } else {
-            beta_low
-          }
-          trace_data$beta <- c(trace_data$beta, beta_val)
-        }
       }
 
       # Reset timer for next iteration
@@ -1023,6 +853,19 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
 
     # Track if current iteration used Newton for next iteration's sigma reset logic
     prev_used_newton <- used_newton
+
+    if (isTRUE(control$verbose)) {
+      scale_label <- if (solver_mode == "tr") "radius" else "sigma"
+      scale_value <- if (solver_mode == "tr") radius_current else sigma_current
+      message(sprintf(
+        "iter %4d  f = %12.6e  |g|_inf = %9.3e  rho = %6.3f  %s = %9.3e  mode = %s",
+        iter + 1L, f_current, max(abs(g_current)),
+        if (is.finite(rho)) rho else NA_real_,
+        scale_label,
+        if (is.null(scale_value) || !is.finite(scale_value)) NA_real_ else scale_value,
+        step_type
+      ))
+    }
 
     iter <- iter + 1
   }
@@ -1043,12 +886,14 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
     iterations = iter,
     evaluations = list(fn = fn_evals, gr = gr_evals, hess = hess_evals),
     message = conv_reason,
-    solver_mode_final = solver_mode,
-    ridge_switches = ridge_switches,
-    radius_final = radius_current,
-    qn_polish_switches = qn_polish_switches,
-    qn_polish_reverts = qn_polish_reverts,
-    hess_evals_at_polish_switch = hess_evals_at_polish_switch
+    diagnostics = list(
+      solver_mode_final = solver_mode,
+      ridge_switches = ridge_switches,
+      radius_final = radius_current,
+      qn_polish_switches = qn_polish_switches,
+      qn_polish_reverts = qn_polish_reverts,
+      hess_evals_at_polish_switch = hess_evals_at_polish_switch
+    )
   )
 
   # Add trace data if collected

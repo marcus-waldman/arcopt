@@ -3,12 +3,12 @@ bibentry(
   title = "arcopt: Adaptive Regularization using Cubics for R",
   author = person("Marcus Waldman"),
   year = 2026,
-  note = "R package version 0.1.0",
+  note = "R package version 0.2.0.9000",
   url = "https://github.com/marcus-waldman/arcopt",
   textVersion = paste(
     "Waldman, M. (2026).",
     "arcopt: Adaptive Regularization using Cubics for R.",
-    "R package version 0.1.0.",
+    "R package version 0.2.0.9000.",
     "https://github.com/marcus-waldman/arcopt"
   )
 )

@@ -29,7 +29,7 @@ The optimizer consists of **8 algorithm groups** organized into 4 layers:
 |-------|------------|---------|
 | **Orchestration** | Algorithm 1 (Main Loop) | Controls iteration flow, dispatches to sub-algorithms |
 | **Core Solvers** | Algorithms 1a, 5 | Newton step, cubic subproblem solver |
-| **Adaptation** | Algorithms 0, 2a/2b, 3 | Convergence, σ updates, momentum |
+| **Adaptation** | Algorithms 0, 2a/2b | Convergence, σ updates |
 | **Safeguards** | Algorithms 6a/6b, 7, 8 | Robustness, constraints |
 
 ## System Flowchart
@@ -91,12 +91,7 @@ flowchart TD
         Y --> AA[Update σ<br/>Algorithm 2a/2b]
         Z --> AA
 
-        AA --> AB{Using<br/>momentum?}
-        AB -->|Yes| AC[Apply momentum<br/>Algorithm 3]
-        AB -->|No| AD[Continue]
-        AC --> AD
-
-        AD --> AE{Using SR1?}
+        AA --> AE{Using SR1?}
         AE -->|Yes| AF[Update B<br/>Algorithm 4]
         AE -->|No| AG[Continue]
         AF --> AG
@@ -242,7 +237,7 @@ The table below shows per-call complexity. For the main loop (Algorithm 1), mult
    - If analytic/FD Hessian: try Newton first (Gershgorin → Cholesky → Armijo)
    - If Newton fails or quasi-Newton: solve cubic subproblem
 5. **Evaluate step**: Compute $\rho_k$; accept if $\rho_k \geq \eta_1$
-6. **Update**: Adjust $\sigma_k$; apply momentum/SR1 if enabled; check safeguards
+6. **Update**: Adjust $\sigma_k$; apply SR1 if enabled; check safeguards
 7. **Repeat** until converged
 
 ## Theoretical Guarantees
@@ -353,8 +348,7 @@ result$trace <- list(
   x = matrix(K, n),         # Iterates (K × n)
   s = matrix(K, n),         # Steps (K × n)
   H = array(K, n, n),       # Hessians (K × n × n)
-  converge_criteria = list(...),  # All 6 convergence values per iteration
-  beta = numeric(K)         # Momentum parameter (if using momentum)
+  converge_criteria = list(...)  # All 6 convergence values per iteration
 )
 ```
 
@@ -659,8 +653,9 @@ PROCEDURE:
        [If Newton skipped/failed/rejected: proceed to cubic solver]
 
     4. CUBIC SUBPROBLEM (Newton failed or rejected):
-       (s_k, λ_k) ← solve_cubic_subproblem(g_k, H_k, σ_k, cubic_solver)
-       [Algorithm 5a (eigendecomposition) based on control$cubic_solver]
+       (s_k, λ_k) ← solve_cubic_subproblem(g_k, H_k, σ_k)
+       [Algorithm 5a (eigendecomposition); the internal dispatcher
+        always selects this solver as of v0.2.0]
 
     5. EVALUATE TRIAL POINT:
        x_trial ← x_k + s_k
@@ -1125,6 +1120,16 @@ Momentum acceleration is **disabled by default** (`use_momentum = FALSE`) due to
 
 ## Algorithm 3: ARCm (Momentum-Accelerated ARC)
 
+::: {.callout-warning}
+**Removed in v0.2.0 (2026-04-24).** This algorithm is no longer
+implemented in `R/arcopt.R`. The `use_momentum` / `momentum_tau` /
+`momentum_alpha1` / `momentum_alpha2` controls and the ~70 LOC
+bisection block have been excised. The recipe is preserved here for
+historical reference and for anyone tracing v0.1.x behavior; recover
+the implementation from git history (`git log -- R/arcopt.R | grep
+momentum`).
+:::
+
 ```
 ALGORITHM 3: ARCm (Momentum-Accelerated ARC) - Gao et al. 2022
 ─────────────────────────────────────────────────────────────────────
@@ -1260,6 +1265,18 @@ Shared Components (both paths):
 | Well-conditioned, many variables | QN-ARC | Faster per-iteration with L-BFGS |
 
 ## Algorithm 4: Adaptive Inexact Cubic Regularized QN
+
+::: {.callout-note}
+**Scope note (v0.2.0).** The `qn_method` enumeration includes
+`"lbfgs"` and `"lsr1"` in this design specification, and many
+downstream subroutines (Algorithms 4a, 4b) reference them.
+The L-* variants were **removed from main in commit `d32abde`
+(2026-04-20)** and are preserved on the `scalable-arc` branch
+pending Algorithm 5b. As of v0.2.0 the implemented `qn_method`
+values are `"sr1"`, `"bfgs"`, and `"hybrid"` (the latter is the
+recommended default and matches what the briefing calls
+"BFGS → SR1 → Powell-damped" routing).
+:::
 
 This is the main outer method that uses QN Hessian approximations with adaptive inexactness control.
 
@@ -1781,6 +1798,15 @@ NOTES:
 ```
 
 ## Algorithm 4a-lhybrid: Limited-Memory Hybrid BFGS/SR1 Update
+
+::: {.callout-warning}
+**Removed from main in commit `d32abde` (2026-04-20).** The `lbfgs`,
+`lsr1`, and `lhybrid` `qn_method` values, the Woodbury-based
+limited-memory solver, and the L-* hybrid routing logic have been
+excised from main. The full implementation is preserved on the
+`scalable-arc` branch pending Algorithm 5b. The pseudocode below is
+retained here as the design specification for that future work.
+:::
 
 Limited-memory version of Algorithm 4a-hybrid. Same routing logic but operates on
 history vectors instead of explicit Hessian matrix.

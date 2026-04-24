@@ -443,40 +443,6 @@ test_that("Newton and cubic steps use same sigma update mechanism", {
   expect_equal(result$par, c(0, 0, 0), tolerance = 1e-8)
 })
 
-test_that("momentum follows Gao et al. (correct beta formula)", {
-  # Test that beta has direct (not inverse) relationship with ||s||
-
-  rosenbrock <- function(x) (1 - x[1])^2 + 100 * (x[2] - x[1]^2)^2
-  rosenbrock_gr <- function(x) {
-    c(-2 * (1 - x[1]) - 400 * x[1] * (x[2] - x[1]^2),
-      200 * (x[2] - x[1]^2))
-  }
-  rosenbrock_hess <- function(x) {
-    matrix(c(
-      1200 * x[1]^2 - 400 * x[2] + 2, -400 * x[1],
-      -400 * x[1], 200
-    ), 2, 2)
-  }
-
-  # With Gao's formula: large steps should allow large momentum
-  result <- arcopt(
-    c(-1.2, 1),
-    rosenbrock,
-    rosenbrock_gr,
-    rosenbrock_hess,
-    control = list(
-      use_momentum = TRUE,
-      momentum_tau = 0.9,
-      momentum_alpha1 = 1.0,  # Allow larger beta
-      momentum_alpha2 = 1.0,
-      maxit = 100
-    )
-  )
-
-  expect_true(result$converged)
-  expect_lt(result$iterations, 50)  # Should converge faster than without momentum
-})
-
 test_that("arcopt forwards ... to fn, gr, and hess", {
   # Scaled sphere: f(x; s) = s * sum(x^2)
   scaled_fn <- function(x, scale) scale * sum(x^2)
@@ -513,36 +479,4 @@ test_that("arcopt forwards ... through use_qn dispatch", {
 
   expect_true(result$converged)
   expect_equal(result$par, c(0, 0), tolerance = 1e-4)
-})
-
-test_that("momentum maintains monotonicity", {
-  # Momentum should never increase function value (at accepted points)
-  # Note: This test verifies that the bisection search ensures monotonicity
-
-  rosenbrock <- function(x) (1 - x[1])^2 + 100 * (x[2] - x[1]^2)^2
-  rosenbrock_gr <- function(x) {
-    c(-2 * (1 - x[1]) - 400 * x[1] * (x[2] - x[1]^2),
-      200 * (x[2] - x[1]^2))
-  }
-  rosenbrock_hess <- function(x) {
-    matrix(c(
-      1200 * x[1]^2 - 400 * x[2] + 2, -400 * x[1],
-      -400 * x[1], 200
-    ), 2, 2)
-  }
-
-  # Run with momentum enabled
-  result <- arcopt(
-    c(-1.2, 1),
-    rosenbrock,
-    rosenbrock_gr,
-    rosenbrock_hess,
-    control = list(use_momentum = TRUE, maxit = 100)
-  )
-
-  # The algorithm should converge successfully
-  expect_true(result$converged)
-
-  # Final function value should be near optimum
-  expect_lt(result$value, 1e-10)
 })

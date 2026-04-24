@@ -160,10 +160,10 @@ result <- arcopt(x0, fn, gr, hess, control = list(
   qn_polish_enabled = TRUE       # cubic<->BFGS polish in basin (opt-in)
 ))
 
-result$solver_mode_final   # "cubic", "tr", or "qn_polish"
-result$ridge_switches      # count of cubic->TR transitions
-result$qn_polish_switches  # count of cubic->polish transitions
-result$qn_polish_reverts   # count of polish->cubic reversions
+result$diagnostics$solver_mode_final   # "cubic", "tr", or "qn_polish"
+result$diagnostics$ridge_switches      # count of cubic->TR transitions
+result$diagnostics$qn_polish_switches  # count of cubic->polish transitions
+result$diagnostics$qn_polish_reverts   # count of polish->cubic reversions
 ```
 
 See `design/design-principles.qmd` §3a for the σ↔r duality framing
@@ -188,14 +188,16 @@ arcopt(x0, fn, gr, hess,
     tr_fallback_enabled = TRUE,   # cubic->TR on stagnation
     qn_polish_enabled   = FALSE,  # cubic<->polish in quadratic basin
 
-    # Momentum (helps ill-conditioned nonconvex problems)
-    use_momentum = FALSE,
-
-    # Diagnostics
-    trace = 1                # Print progress
+    # Output
+    trace   = 1,             # Depth of saved trace data (0/1/2/3)
+    verbose = FALSE          # Print one line per iteration to console
   )
 )
 ```
+
+The full set of advanced controls (cubic regularization tuning,
+TR-fallback thresholds, polish-mode thresholds, QN routing) lives under
+`?arcopt_advanced_controls`.
 
 ## Comparison with optim()
 
@@ -233,13 +235,14 @@ result$iterations          # Number of iterations
 result$evaluations         # List: fn, gr, hess counts
 result$message             # Why it stopped
 
-# Solver-mode diagnostics (populated by the hybrid dispatch)
-result$solver_mode_final   # "cubic", "tr", or "qn_polish" at termination
-result$ridge_switches      # count of cubic->TR transitions (0 or 1)
-result$radius_final        # final TR radius if switched; NA otherwise
-result$qn_polish_switches  # count of cubic->qn_polish transitions
-result$qn_polish_reverts   # count of qn_polish->cubic reversions
-result$hess_evals_at_polish_switch  # baseline for computing Hessian-eval savings
+# Solver-mode diagnostics (nested sublist; most users do not inspect this).
+# See ?arcopt_advanced_controls for the full schema.
+result$diagnostics$solver_mode_final           # "cubic", "tr", or "qn_polish"
+result$diagnostics$ridge_switches              # count of cubic->TR transitions
+result$diagnostics$radius_final                # final TR radius (NA if no switch)
+result$diagnostics$qn_polish_switches          # count of cubic->qn_polish transitions
+result$diagnostics$qn_polish_reverts           # count of qn_polish->cubic reversions
+result$diagnostics$hess_evals_at_polish_switch # baseline for Hessian-eval savings
 ```
 
 ## References
