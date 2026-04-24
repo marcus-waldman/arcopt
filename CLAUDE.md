@@ -16,7 +16,7 @@ The optimizer implements a hierarchical 4-layer system:
 
 1. **Orchestration Layer**: Main loop (Algorithm 1) that controls iteration flow and dispatches to sub-algorithms
 2. **Core Solvers Layer**: Newton step computation (Algorithm 1a) and eigendecomposition cubic solver (Algorithm 5a)
-3. **Adaptation Layer**: Convergence checks (Algorithm 0), σ (sigma) regularization updates (Algorithms 2a/2b), and momentum (Algorithm 3)
+3. **Adaptation Layer**: Convergence checks (Algorithm 0) and σ (sigma) regularization updates (Algorithms 2a/2b)
 4. **Safeguards Layer**: Indefiniteness handling (Algorithms 6a/6b), box constraint truncation (Algorithm 7), and linear equality constraint handling (Algorithm 8)
 
 ### Key Design Philosophy
@@ -28,19 +28,26 @@ The optimizer implements a hierarchical 4-layer system:
 
 ## Documentation
 
+- **NEWS.md**: Source-of-truth changelog. Read first when picking up a new session — it lists what changed in each release.
 - **design/design-principles.qmd**: Design philosophy, target user profile, problem characteristics, and core principles
-- **design/pseudocode.qmd**: Complete algorithmic specifications (8 algorithm groups) with system flowchart and detailed pseudocode
+- **design/pseudocode.qmd**: Complete algorithmic specifications (8 algorithm groups) with system flowchart and detailed pseudocode. Note: Algorithm 3 (momentum) and Algorithm 4a-lhybrid (limited-memory) sections are flagged as removed; preserved for historical reference.
 - **design/literature-review.qmd**: Academic references and theoretical foundations
 - **literature/consensus_reviews/**: Topic-specific reviews on regularization parameters, failure modes, and comparisons with other ARC implementations
+
+## v0.2.0 user surface (post-simplification)
+
+The user-facing control surface was tiered in v0.2.0. When advising users:
+
+- **`?arcopt`** documents only seven Tier 1 controls: `maxit`, `gtol_abs`, `ftol_abs`, `xtol_abs`, `trace`, `verbose`, `use_qn`. The first four are tolerances; `trace` (0/1/2/3) controls saved per-iteration data depth; `verbose` (TRUE/FALSE) prints one line per iteration to the console (orthogonal to `trace`); `use_qn = TRUE` routes to the (non-exported) quasi-Newton variant.
+- **`?arcopt_advanced_controls`** documents everything else — cubic regularization tuning (`sigma0`, `eta1/2`, `gamma1/2`, ...), the trust-region fallback (`tr_fallback_*`, `tr_*`), the optional polish mode (`qn_polish_*`, default off), and the QN routing parameters (`qn_method`, `qn_route_*`).
+- **`result$diagnostics`** is a sublist holding mode-dispatch diagnostics: `solver_mode_final`, `ridge_switches`, `radius_final`, `qn_polish_switches`, `qn_polish_reverts`, `hess_evals_at_polish_switch`. QN runs additionally include `qn_updates`, `qn_skips`, `qn_restarts`, `qn_fd_refreshes`. Most users do not need to inspect these.
+- **`arcopt_qn()` is internal** (not in NAMESPACE). Users go through `arcopt(use_qn = TRUE)`. The internal function still has its own `?arcopt_qn` help page for power users.
 
 ## Development Guidelines
 
 ### Project Stage
 
-This is a research project in early development stages. The repository currently contains:
-- Documentation and design specifications (no implementation yet)
-- Git history not yet initialized on main branch
-- Focus on algorithm specification before coding
+Current state (v0.2.0.9000): tri-modal solver shipped (cubic / TR-fallback / qn_polish-opt-in), 594 unit tests passing, `devtools::check()` clean modulo four pre-existing notes about non-package directories (`benchmarks/`, `manuscript/`, `hexsticker/`). JSS manuscript at `manuscript/arcopt-jss.qmd` (gitignored, local-only); rendered PDF ~282 KB / 57 pages. CRAN submission not yet attempted.
 
 ### When Implementing Features
 
@@ -50,32 +57,36 @@ This is a research project in early development stages. The repository currently
 4. **Test on pathological problems**: Ill-conditioned, nonconvex, indefinite Hessian, saddle point, and ridge maximum cases
 5. **Reference design principles** when making architectural decisions—existing decisions are well-justified
 
-### Future Development Priorities
+### Implemented
 
-Based on literature review and design documents:
-- Core cubic regularization solver (Algorithm 5a) with eigendecomposition ✓
-- Adaptive regularization updates (Algorithms 2a/2b) for σ adjustment ✓
-- Indefiniteness handling for negative curvature ✓
-- Constraint handling (Algorithms 7-8) for box and linear equality constraints ✓
-- Momentum acceleration (Algorithm 3) as ARCm variant ✓
+- Core cubic regularization solver (Algorithm 5a) with eigendecomposition
+- Adaptive regularization updates (Algorithms 2a/2b) for σ adjustment
+- Indefiniteness handling for negative curvature
+- Box-constraint handling (Algorithm 7) via step truncation
+- Quasi-Newton variants (Algorithm 4): SR1, BFGS, hybrid (BFGS → SR1 → Powell-damped) with FD-Hessian seeding of B₀
+- Trust-region fallback (cubic → TR on flat-ridge stagnation, default on)
+- QN-polish mode (cubic ↔ Wolfe line-search BFGS in healthy basin, opt-in)
 
 ### Deferred Features
 
-To maintain focus on core use case (statisticians, 2-500 parameters, analytic Hessians):
+To maintain focus on the core use case (statisticians, 2–500 parameters, analytic Hessians):
 
-**Removed in favor of eigendecomposition:**
-- LDL-based cubic solver (see design/historical/ldl-solver.qmd)
+**Removed in v0.2.0 (2026-04-24):**
+- Momentum acceleration (`use_momentum`, `momentum_tau`, `momentum_alpha1`, `momentum_alpha2` controls + the Gao et al. 2022 ARCm bisection block); see Algorithm 3 in `design/pseudocode.qmd` (banner-marked).
+- `cubic_solver` user-facing knob (the internal dispatcher always selects the eigendecomposition solver; preserved as an extensibility hook for the deferred Algorithm 5b).
 
-**Now implemented (Algorithm 4 variants):**
-- SR1, BFGS, L-SR1, L-BFGS quasi-Newton updates
-- Hybrid routing (BFGS → SR1 → Powell damping) for robustness
-- L-Hybrid for limited-memory with same routing logic
+**Removed before v0.2.0:**
+- L-BFGS / L-SR1 / L-Hybrid quasi-Newton variants (commit `d32abde`, 2026-04-20). Preserved on the `scalable-arc` branch pending Algorithm 5b.
+- LDL-based cubic solver (see `design/historical/ldl-solver.qmd`); replaced by eigendecomposition.
+- Linear equality constraint handling (Algorithm 8) — design retained, implementation deferred.
 
 **Deferred to future releases:**
 - ARCqK multi-shift CG-Lanczos solver (Algorithm 5b) for n > 500
-- Matrix-free optimization via hess_vec interface
+- Matrix-free optimization via `hess_vec` interface
+- `tr → qn_polish` transition (v3 feature; today TR is a terminal mode)
+- `qn_polish_enabled = TRUE` as default (currently opt-in pending broader benchmark evidence)
 
-See design/scalable-arcs.qmd for preserved implementations and design rationale.
+See `design/scalable-arcs.qmd` for preserved L-* implementations and design rationale.
 
 ## Development Workflow & CRAN Compliance
 
