@@ -96,13 +96,15 @@ run_one <- function(problem, mode_name, reps) {
   cat(sprintf("[profile] %s / %s : %d rep(s)...\n",
               problem$label, mode_name, reps))
 
-  # Warmup: a single un-profiled call so R's bytecode compiler finishes
-  # JIT-compiling every closure before sampling begins. Otherwise
-  # findCenvVar / cmp / cmpCall etc. pollute the early samples on
-  # short-running problems (mixture, GMM).
+  # Warmup: a single short un-profiled call so R's bytecode compiler
+  # finishes JIT-compiling the hot closures before sampling begins.
+  # Capped at maxit=5 so it stays cheap on n=299 (DPM Heckman) without
+  # losing its purpose -- JIT pollution mostly hits short problems.
+  warmup_ctrl <- ctrl
+  warmup_ctrl$maxit <- 5L
   arcopt::arcopt(x0 = problem$x0, fn = problem$fn,
                  gr = problem$gr, hess = problem$hess,
-                 control = ctrl)
+                 control = warmup_ctrl)
 
   t0 <- proc.time()[["elapsed"]]
 
