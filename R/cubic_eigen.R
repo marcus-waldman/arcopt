@@ -16,6 +16,10 @@
 #'   \item{pred_reduction}{Predicted reduction: -g^T s - 1/2 s^T H s - sigma/3 ||s||^3}
 #'   \item{converged}{TRUE if secular equation converged}
 #'   \item{case_type}{"easy", "hard", or "zero_gradient"}
+#'   \item{eigenvalues}{Eigenvalues of `H` sorted increasing, or `NULL` for
+#'     the zero-gradient early-return path. Exposed so callers can reuse
+#'     the spectrum (e.g. for `lambda_min` in end-of-iteration detectors)
+#'     instead of re-decomposing `H`.}
 #'
 #' @details
 #' Uses eigen() for O(n^3) eigendecomposition. Hard case occurs when gradient
@@ -37,7 +41,8 @@ solve_cubic_eigen <- function(g, H, sigma,
       lambda = 0,
       pred_reduction = 0,
       converged = TRUE,
-      case_type = "zero_gradient"
+      case_type = "zero_gradient",
+      eigenvalues = NULL
     ))
   }
 
@@ -96,7 +101,8 @@ solve_cubic_eigen <- function(g, H, sigma,
       lambda = lambda_star,
       pred_reduction = pred_reduction,
       converged = TRUE,
-      case_type = "hard"
+      case_type = "hard",
+      eigenvalues = eigenvalues
     ))
   }
 
@@ -167,6 +173,7 @@ solve_cubic_eigen <- function(g, H, sigma,
     lambda = lambda,
     pred_reduction = pred_reduction,
     converged = converged,
-    case_type = "easy"
+    case_type = "easy",
+    eigenvalues = eigenvalues
   ))
 }

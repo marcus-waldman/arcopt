@@ -33,6 +33,10 @@ List with:
 \item{pred_reduction}{Predicted reduction: -g^T s - 1/2 s^T H s - sigma/3 ||s||^3}
 \item{converged}{TRUE if secular equation converged}
 \item{case_type}{"easy", "hard", or "zero_gradient"}
+\item{eigenvalues}{Eigenvalues of \code{H} sorted increasing, or \code{NULL} for
+the zero-gradient early-return path. Exposed so callers can reuse
+the spectrum (e.g. for \code{lambda_min} in end-of-iteration detectors)
+instead of re-decomposing \code{H}.}
 }
 \description{
 Solves min_s m(s) = g^T s + 1/2 s^T H s + sigma/3 ||s||^3 using full

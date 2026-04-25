@@ -541,6 +541,7 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
     # STEP 2: Try Newton step first (if not rejected and hess provided)
     step_type <- "cubic"
     used_newton <- FALSE
+    cubic_result <- NULL
 
     if (!prev_rejected && !is.null(hess)) {
       newton_result <- try_newton_step(g_current, h_current)
@@ -701,14 +702,20 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
       )
     }
 
-    # Update both end-of-cubic-iteration detectors. Compute lambda_min
-    # once and share between them to avoid a redundant eigendecomp.
+    # Update both end-of-cubic-iteration detectors. Reuse the cubic
+    # solver's eigendecomposition (sorted increasing) if it ran this
+    # iteration; otherwise fall back to a fresh `eigen()` call.
     if (is.finite(rho) &&
           (control$tr_fallback_enabled || control$qn_polish_enabled)) {
-      lambda_min_current <- tryCatch(
-        min(eigen(h_current, symmetric = TRUE, only.values = TRUE)$values),
-        error = function(e) NA_real_
-      )
+      lambda_min_current <- if (!is.null(cubic_result$eigenvalues)) {
+        cubic_result$eigenvalues[1]
+      } else {
+        tryCatch(
+          min(eigen(h_current, symmetric = TRUE,
+                    only.values = TRUE)$values),
+          error = function(e) NA_real_
+        )
+      }
       g_inf_current <- max(abs(g_current))
     } else {
       lambda_min_current <- NA_real_
