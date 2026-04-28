@@ -12,7 +12,14 @@
 ^design$
 ^literature$
 ^todo$
+^benchmarks$
+^hexsticker$
+^manuscript$
+^lib$
 ^cran-comments\.md$
 ^CRAN-SUBMISSION$
+^AI_USE_REPORT\.md$
 ^\.git$
 ^\.gitignore$
+^doc$
+^Meta$

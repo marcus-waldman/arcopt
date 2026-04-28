@@ -38,6 +38,7 @@
 #' guarantee applies.
 #'
 #' @name flat_ridge
+#' @keywords internal
 NULL
 
 #' Initialize Flat-Ridge Detector State

@@ -11,13 +11,12 @@ Implements cubic regularization methods (ARC) for local optimization problems co
 Useful links:
 \itemize{
   \item \url{https://github.com/marcus-waldman/arcopt}
-  \item \url{https://marcus-waldman.github.io/arcopt/}
   \item Report bugs at \url{https://github.com/marcus-waldman/arcopt/issues}
 }
 
 }
 \author{
-\strong{Maintainer}: Marcus Waldman \email{your.email@domain.com}
+\strong{Maintainer}: Marcus Waldman \email{marcus.waldman@cuanschutz.edu}
 
 }
 \keyword{internal}

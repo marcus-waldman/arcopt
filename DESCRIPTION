@@ -1,9 +1,9 @@
 Package: arcopt
 Type: Package
 Title: Adaptive Regularization using Cubics for Optimization
-Version: 0.2.0.9000
+Version: 0.3.0
 Authors@R: c(
-    person("Marcus", "Waldman", email = "your.email@domain.com",
+    person("Marcus", "Waldman", email = "marcus.waldman@cuanschutz.edu",
            role = c("aut", "cre")))
 Description: Implements cubic regularization methods (ARC) for local
     optimization problems common in statistics and applied research. Provides
@@ -12,8 +12,7 @@ Description: Implements cubic regularization methods (ARC) for local
     linear equality constraints are planned for a future release.
 License: MIT + file LICENSE
 Encoding: UTF-8
-LazyData: true
-URL: https://github.com/marcus-waldman/arcopt, https://marcus-waldman.github.io/arcopt/
+URL: https://github.com/marcus-waldman/arcopt
 BugReports: https://github.com/marcus-waldman/arcopt/issues
 Depends:
     R (>= 4.1.0)

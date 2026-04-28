@@ -41,3 +41,4 @@ convergence even at degenerate minima; the detector fires precisely in
 the regime where EB is practically vacuous and no theoretical convergence
 guarantee applies.
 }
+\keyword{internal}

@@ -43,7 +43,7 @@
 #' }
 #' The algorithm first brackets an interval containing a Wolfe point, then
 #' bisects within the bracket to locate one. Bisection is used for
-#' simplicity; quadratic or cubic interpolation as in Nocedal & Wright §3.5
+#' simplicity; quadratic or cubic interpolation as in Nocedal & Wright Sec. 3.5
 #' can be added as a future refinement.
 #'
 #' Returns `success = FALSE` when no strong Wolfe alpha is found within

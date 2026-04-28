@@ -53,7 +53,7 @@ into \code{result$trace}: \code{0} collects nothing, \code{1} (the default)
 collects function value and gradient norm, \code{2} adds sigma, rho,
 step type and reciprocal Hessian condition number, \code{3} adds the
 full iterate, step, Hessian and convergence-criterion record.
-This flag controls \emph{saved} data only — for live console output
+This flag controls \emph{saved} data only -- for live console output
 see \code{verbose}.}
 \item{\code{verbose}}{Logical. If \code{TRUE}, prints one line per iteration
 to the console showing iteration number, objective value,
@@ -84,7 +84,7 @@ run ended in qn_polish mode).
 \item \code{message}: Convergence reason.
 \item \code{trace}: Per-iteration trace data (depth controlled by
 \code{control$trace}); \code{NULL} when \code{trace = 0}.
-\item \code{diagnostics}: Sublist of internal mode-dispatch diagnostics —
+\item \code{diagnostics}: Sublist of internal mode-dispatch diagnostics --
 \code{solver_mode_final}, \code{ridge_switches}, \code{radius_final},
 \code{qn_polish_switches}, \code{qn_polish_reverts}, and
 \code{hess_evals_at_polish_switch}. See \verb{\link{arcopt_advanced_controls}}

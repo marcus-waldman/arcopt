@@ -36,7 +36,7 @@ step (default \code{0.5}).}
 
 \section{Trust-region fallback (cubic to TR on flat-ridge detection)}{
 
-Cubic regularization can stagnate in "flat-ridge" regimes — iterations
+Cubic regularization can stagnate in "flat-ridge" regimes -- iterations
 with the regularization floor pinned, model predictions matching the
 objective (\eqn{\rho \approx 1}), gradient stalling, and a Hessian
 that is positive-definite but nearly singular. This is outside the
@@ -57,7 +57,7 @@ from the cubic subproblem to a trust-region subproblem.
 \verb{||g||_inf} above which the gradient counts as stagnant
 (default \code{0.9}).}
 \item{\code{tr_fallback_g_inf_floor}}{Absolute lower bound on \verb{||g||_inf}
-below which the switch will not fire — keeps the hybrid from
+below which the switch will not fire -- keeps the hybrid from
 triggering at true local minima (default \code{1e-6}).}
 \item{\code{tr_r0}}{Initial trust-region radius at the switch
 (default \code{1.0}).}
@@ -155,7 +155,7 @@ problems but can hurt nonconvex (default \code{FALSE}).}
 Mode-dispatch diagnostics are nested under \code{result$diagnostics} so the
 primary return list stays compact.
 \describe{
-\item{\code{solver_mode_final}}{\code{"cubic"}, \code{"tr"}, or \code{"qn_polish"} —
+\item{\code{solver_mode_final}}{\code{"cubic"}, \code{"tr"}, or \code{"qn_polish"} --
 which subproblem solver was active at termination.}
 \item{\code{ridge_switches}}{Integer count of cubic to TR transitions
 (\code{0} or \code{1} in v1; the switch is one-way).}

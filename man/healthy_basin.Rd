@@ -39,3 +39,4 @@ detector fires on \emph{stagnation} (gradient not decreasing); this one
 fires on \emph{healthy convergence} (gradient decreasing super-
 linearly). Both are expected to be mutually exclusive in practice.
 }
+\keyword{internal}

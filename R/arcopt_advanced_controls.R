@@ -2,7 +2,7 @@
 # =======================================
 #
 # Documentation-only file. Provides ?arcopt_advanced_controls covering
-# Tier 2 controls — cubic regularization tuning, the trust-region
+# Tier 2 controls -- cubic regularization tuning, the trust-region
 # fallback, the quasi-Newton polish mode, and the QN-variant routing
 # parameters. ?arcopt itself documents only the Tier 1 controls.
 
@@ -37,7 +37,7 @@
 #' }
 #'
 #' @section Trust-region fallback (cubic to TR on flat-ridge detection):
-#' Cubic regularization can stagnate in "flat-ridge" regimes — iterations
+#' Cubic regularization can stagnate in "flat-ridge" regimes -- iterations
 #' with the regularization floor pinned, model predictions matching the
 #' objective (\eqn{\rho \approx 1}), gradient stalling, and a Hessian
 #' that is positive-definite but nearly singular. This is outside the
@@ -58,7 +58,7 @@
 #'     `||g||_inf` above which the gradient counts as stagnant
 #'     (default `0.9`).}
 #'   \item{`tr_fallback_g_inf_floor`}{Absolute lower bound on `||g||_inf`
-#'     below which the switch will not fire — keeps the hybrid from
+#'     below which the switch will not fire -- keeps the hybrid from
 #'     triggering at true local minima (default `1e-6`).}
 #'   \item{`tr_r0`}{Initial trust-region radius at the switch
 #'     (default `1.0`).}
@@ -150,7 +150,7 @@
 #' Mode-dispatch diagnostics are nested under `result$diagnostics` so the
 #' primary return list stays compact.
 #' \describe{
-#'   \item{`solver_mode_final`}{`"cubic"`, `"tr"`, or `"qn_polish"` —
+#'   \item{`solver_mode_final`}{`"cubic"`, `"tr"`, or `"qn_polish"` --
 #'     which subproblem solver was active at termination.}
 #'   \item{`ridge_switches`}{Integer count of cubic to TR transitions
 #'     (`0` or `1` in v1; the switch is one-way).}

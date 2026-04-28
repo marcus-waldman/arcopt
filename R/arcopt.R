@@ -34,7 +34,7 @@
 #'       collects function value and gradient norm, `2` adds sigma, rho,
 #'       step type and reciprocal Hessian condition number, `3` adds the
 #'       full iterate, step, Hessian and convergence-criterion record.
-#'       This flag controls *saved* data only — for live console output
+#'       This flag controls *saved* data only -- for live console output
 #'       see `verbose`.}
 #'     \item{`verbose`}{Logical. If `TRUE`, prints one line per iteration
 #'       to the console showing iteration number, objective value,
@@ -80,7 +80,7 @@
 #' * `message`: Convergence reason.
 #' * `trace`: Per-iteration trace data (depth controlled by
 #'   `control$trace`); `NULL` when `trace = 0`.
-#' * `diagnostics`: Sublist of internal mode-dispatch diagnostics —
+#' * `diagnostics`: Sublist of internal mode-dispatch diagnostics --
 #'   `solver_mode_final`, `ridge_switches`, `radius_final`,
 #'   `qn_polish_switches`, `qn_polish_reverts`, and
 #'   `hess_evals_at_polish_switch`. See `\link{arcopt_advanced_controls}`
@@ -469,7 +469,7 @@ arcopt <- function(x0, fn, gr, hess = NULL, ...,
             rho <- NaN
             pred_reduction <- 0
           } else {
-            # Line search succeeded — accept step
+            # Line search succeeded -- accept step
             qn_polish_fail_count <- 0L
             s_polish <- ls$alpha * d_polish
 

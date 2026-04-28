@@ -51,3 +51,5 @@ benchmarks/dpm_heckman/*.dll
 benchmarks/dpm_heckman/*.so
 benchmarks/profiling/results/
 lib/
+/doc/
+/Meta/

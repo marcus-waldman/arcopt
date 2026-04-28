@@ -56,7 +56,7 @@ places \code{||s(lambda)|| = radius}. Found by Newton on the secular
 equation.
 \item \strong{Hard case}: Hessian is indefinite and the gradient is
 nearly orthogonal to the smallest-eigenvalue eigenvector. Resolved
-per Moré-Sorensen by setting \code{lambda = -lambda_min(H)} and adding
+per More-Sorensen by setting \code{lambda = -lambda_min(H)} and adding
 a component along the smallest eigenvector to reach the boundary.
 }
 

@@ -1,4 +1,23 @@
-# arcopt 0.2.0 (development) — user-experience overhaul
+# arcopt 0.3.0 — first CRAN release
+
+This is the first CRAN release of **arcopt**. The headline feature is
+the tri-modal solver shipped in v0.2.0 (cubic / trust-region fallback /
+quasi-Newton polish), wrapped with the tiered control surface
+documented under `?arcopt` (Tier 1) and `?arcopt_advanced_controls`
+(Tier 2). See the v0.2.0 entry below for the full feature description.
+
+## Other changes since v0.2.0
+
+* Cubic solver now reuses its eigendecomposition at end-of-iteration
+  detector checks, removing redundant work and trimming roughly 0.3%
+  of total runtime on large-scale benchmarks.
+
+* Added benchmarking and profiling scaffolding under `benchmarks/` for
+  identifying C++ port candidates. Excluded from the package build;
+  available in the GitHub source tree.
+
+
+# arcopt 0.2.0 — user-experience overhaul
 
 This release reduces the user-facing control surface and the return-list
 clutter without changing default optimization behavior on any tested

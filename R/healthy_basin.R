@@ -36,6 +36,7 @@
 #' linearly). Both are expected to be mutually exclusive in practice.
 #'
 #' @name healthy_basin
+#' @keywords internal
 NULL
 
 #' Initialize Healthy-Basin Detector State
