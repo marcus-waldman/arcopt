@@ -56,16 +56,21 @@ arcopt_qn(
 
 ## Value
 
-Same structure as arcopt, plus:
+Same structure as `\link{arcopt}`. The `diagnostics` sublist gains four
+QN-specific counters in addition to the standard mode- dispatch fields:
 
-- `qn_updates`: Number of successful QN updates
+- `qn_updates`: number of successful QN updates;
 
-- `qn_skips`: Number of skipped updates
+- `qn_skips`: number of skipped updates (curvature condition failed);
 
-- `qn_restarts`: Number of approximation restarts
+- `qn_restarts`: number of approximation restarts;
 
-- `qn_fd_refreshes`: Number of FD Hessian refreshes performed (hybrid
-  mode only; 0 for other qn_method values)
+- `qn_fd_refreshes`: number of FD Hessian refreshes performed (hybrid
+  mode only; 0 otherwise).
+
+`qn_polish_switches`, `qn_polish_reverts`, and
+`hess_evals_at_polish_switch` are always `0L`/`NA` for QN runs (the
+polish mode is exact-Hessian only).
 
 ## Details
 
@@ -135,3 +140,17 @@ cubic-model predictions have tracked the true objective:
 - `qn_stuck_refresh_k` (default 100): while in "indefinite" mode, this
   many iterations without promoting also triggers an FD refresh (safety
   net for secondary-saddle stalls)
+
+### Trust-Region Fallback
+
+All `tr_fallback_*` and `tr_*` control parameters from
+[`arcopt`](https://marcus-waldman.github.io/arcopt/reference/arcopt.md)
+are respected. In QN mode the flat-ridge detector uses `lambda_min(B_k)`
+(the QN approximation's smallest eigenvalue) as the ridge signal,
+consistent with the quantity the cubic subproblem acts on. The ridge
+detector and the QN FD-refresh triggers are mutually exclusive: the FD
+refresh fires only in `"indefinite"` routing mode, while the ridge
+detector requires `lambda_min(B_k) > 0`, so both cannot fire on the same
+iteration. If the one-way switch to trust-region mode occurs, subsequent
+iterations no longer update the `indefinite`-mode counters (since they
+are gated on being in cubic mode).

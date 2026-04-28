@@ -11,7 +11,7 @@ Hessian function."></head><body>
 
     <a class="navbar-brand me-2" href="../index.html">arcopt</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.3.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -105,12 +105,17 @@ initializes B_0 = H(x_0) and can refresh when approximation degrades.</p></dd>
 </dl></div>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
-    <p>Same structure as arcopt, plus:</p><ul><li><p><code>qn_updates</code>: Number of successful QN updates</p></li>
-<li><p><code>qn_skips</code>: Number of skipped updates</p></li>
-<li><p><code>qn_restarts</code>: Number of approximation restarts</p></li>
-<li><p><code>qn_fd_refreshes</code>: Number of FD Hessian refreshes performed (hybrid
-mode only; 0 for other qn_method values)</p></li>
-</ul></div>
+    <p>Same structure as <code>\link{arcopt}</code>. The <code>diagnostics</code> sublist
+gains four QN-specific counters in addition to the standard mode-
+dispatch fields:</p><ul><li><p><code>qn_updates</code>: number of successful QN updates;</p></li>
+<li><p><code>qn_skips</code>: number of skipped updates (curvature condition failed);</p></li>
+<li><p><code>qn_restarts</code>: number of approximation restarts;</p></li>
+<li><p><code>qn_fd_refreshes</code>: number of FD Hessian refreshes performed
+(hybrid mode only; 0 otherwise).</p></li>
+</ul><p><code>qn_polish_switches</code>, <code>qn_polish_reverts</code>, and
+<code>hess_evals_at_polish_switch</code> are always <code>0L</code>/<code>NA</code> for QN runs
+(the polish mode is exact-Hessian only).</p>
+    </div>
     <div class="section level2">
     <h2 id="details">Details<a class="anchor" aria-label="anchor" href="#details"></a></h2>
     <p>The QN-ARC algorithm maintains a quasi-Newton Hessian approximation B_k
@@ -169,6 +174,23 @@ consecutive bad rho steps rebuild B_k from a fresh FD Hessian</p></li>
 this many iterations without promoting also triggers an FD refresh
 (safety net for secondary-saddle stalls)</p></li>
 </ul></div>
+
+<div class="section">
+<h3 id="trust-region-fallback">Trust-Region Fallback<a class="anchor" aria-label="anchor" href="#trust-region-fallback"></a></h3>
+
+
+<p>All <code>tr_fallback_*</code> and <code>tr_*</code> control parameters from
+<code><a href="arcopt.html">arcopt</a></code> are respected. In QN mode the flat-ridge detector
+uses <code>lambda_min(B_k)</code> (the QN approximation's smallest eigenvalue)
+as the ridge signal, consistent with the quantity the cubic subproblem
+acts on. The ridge detector and the QN FD-refresh triggers are
+mutually exclusive: the FD refresh fires only in <code>"indefinite"</code>
+routing mode, while the ridge detector requires <code>lambda_min(B_k) &gt; 0</code>,
+so both cannot fire on the same iteration. If the one-way switch to
+trust-region mode occurs, subsequent iterations no longer update the
+<code>indefinite</code>-mode counters (since they are gated on being in cubic
+mode).</p>
+</div>
 
     </div>
 

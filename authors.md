@@ -10,13 +10,13 @@ Source:
 [`inst/CITATION`](https://github.com/marcus-waldman/arcopt/blob/main/inst/CITATION)
 
 Waldman, M. (2026). arcopt: Adaptive Regularization using Cubics for R.
-R package version 0.1.0. https://github.com/marcus-waldman/arcopt
+R package version 0.2.0.9000. https://github.com/marcus-waldman/arcopt
 
     @Manual{,
       title = {arcopt: Adaptive Regularization using Cubics for R},
       author = {{Marcus Waldman}},
       year = {2026},
-      note = {R package version 0.1.0},
+      note = {R package version 0.2.0.9000},
       url = {https://github.com/marcus-waldman/arcopt},
     }
 

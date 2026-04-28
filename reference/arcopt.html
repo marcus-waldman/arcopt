@@ -11,7 +11,7 @@ and indefinite Hessian problems common in statistical applications."></head><bod
 
     <a class="navbar-brand me-2" href="../index.html">arcopt</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.3.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -75,18 +75,19 @@ and indefinite Hessian problems common in statistical applications.</p>
 
 
 <dt id="arg-fn">fn<a class="anchor" aria-label="anchor" href="#arg-fn"></a></dt>
-<dd><p>Function that computes the objective function value. Should take a
-numeric vector of length Q and return a scalar.</p></dd>
+<dd><p>Function that computes the objective function value. Should take
+a numeric vector of length Q and return a scalar.</p></dd>
 
 
 <dt id="arg-gr">gr<a class="anchor" aria-label="anchor" href="#arg-gr"></a></dt>
-<dd><p>Function that computes the gradient. Should take a numeric vector
-of length Q and return a numeric vector of length Q. Required.</p></dd>
+<dd><p>Function that computes the gradient. Should take a numeric
+vector of length Q and return a numeric vector of length Q. Required.</p></dd>
 
 
 <dt id="arg-hess">hess<a class="anchor" aria-label="anchor" href="#arg-hess"></a></dt>
-<dd><p>Function that computes the Hessian matrix. Should take a numeric
-vector of length Q and return a Q×Q symmetric matrix. Required.</p></dd>
+<dd><p>Function that computes the Hessian matrix. Should take a
+numeric vector of length Q and return a Q-by-Q symmetric matrix.
+Required (unless <code>control$use_qn = TRUE</code>; see Details).</p></dd>
 
 
 <dt id="arg--">...<a class="anchor" aria-label="anchor" href="#arg--"></a></dt>
@@ -104,67 +105,99 @@ unbounded parameters. Default: all <code>Inf</code>.</p></dd>
 
 
 <dt id="arg-control">control<a class="anchor" aria-label="anchor" href="#arg-control"></a></dt>
-<dd><p>List of control parameters (see Details).</p></dd>
+<dd><p>A named list of control parameters. The user-facing
+tolerances and switches are documented below; advanced regularization
+tuning, the trust-region fallback, and the quasi-Newton polish mode
+live on a separate help page (see <code>\link{arcopt_advanced_controls}</code>).
+Recognized entries:</p><dl><dt><code>maxit</code></dt>
+<dd><p>Maximum number of iterations (default <code>1000</code>).</p></dd>
+
+<dt><code>gtol_abs</code></dt>
+<dd><p>Absolute gradient-norm tolerance for convergence
+(default <code>1e-5</code>).</p></dd>
+
+<dt><code>ftol_abs</code></dt>
+<dd><p>Absolute objective-value tolerance (default
+<code>1e-8</code>).</p></dd>
+
+<dt><code>xtol_abs</code></dt>
+<dd><p>Absolute step-size tolerance (default <code>1e-8</code>).</p></dd>
+
+<dt><code>trace</code></dt>
+<dd><p>Integer in <code>0:3</code>. Depth of per-iteration data captured
+into <code>result$trace</code>: <code>0</code> collects nothing, <code>1</code> (the default)
+collects function value and gradient norm, <code>2</code> adds sigma, rho,
+step type and reciprocal Hessian condition number, <code>3</code> adds the
+full iterate, step, Hessian and convergence-criterion record.
+This flag controls <em>saved</em> data only – for live console output
+see <code>verbose</code>.</p></dd>
+
+<dt><code>verbose</code></dt>
+<dd><p>Logical. If <code>TRUE</code>, prints one line per iteration
+to the console showing iteration number, objective value,
+<code>||g||_inf</code>, ratio rho, regularization scale, and active solver
+mode (default <code>FALSE</code>). Orthogonal to <code>trace</code>.</p></dd>
+
+<dt><code>use_qn</code></dt>
+<dd><p>Logical. If <code>TRUE</code>, route to the quasi-Newton ARC
+variant, which approximates the Hessian via SR1/BFGS updates and
+does not require an analytic <code>hess</code> function. See the
+advanced-controls page for QN-specific parameters (default
+<code>FALSE</code>).</p></dd>
+
+
+</dl><p>See <code>\link{arcopt_advanced_controls}</code> for the full set of advanced
+tuning parameters governing the cubic regularization, the trust-region
+fallback, and the quasi-Newton polish mode.</p></dd>
 
 </dl></div>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
-    <p>A list with components:</p><ul><li><p><code>par</code>: Optimal parameter vector</p></li>
-<li><p><code>value</code>: Optimal function value</p></li>
-<li><p><code>gradient</code>: Gradient at optimum</p></li>
-<li><p><code>hessian</code>: Hessian at optimum (if <code>hess</code> provided)</p></li>
-<li><p><code>converged</code>: Logical, whether convergence criteria met</p></li>
-<li><p><code>iterations</code>: Number of iterations performed</p></li>
-<li><p><code>evaluations</code>: List with <code>fn</code>, <code>gr</code>, and <code>hess</code> evaluation counts</p></li>
-<li><p><code>message</code>: Convergence message</p></li>
+    <p>A list with components:</p><ul><li><p><code>par</code>: Optimal parameter vector.</p></li>
+<li><p><code>value</code>: Objective value at <code>par</code>.</p></li>
+<li><p><code>gradient</code>: Gradient at <code>par</code>.</p></li>
+<li><p><code>hessian</code>: Hessian at <code>par</code> (or the final BFGS approximation if the
+run ended in qn_polish mode).</p></li>
+<li><p><code>sigma</code>: Final cubic regularization parameter.</p></li>
+<li><p><code>converged</code>: Logical; whether convergence criteria were met.</p></li>
+<li><p><code>iterations</code>: Number of iterations performed.</p></li>
+<li><p><code>evaluations</code>: Named list of <code>fn</code>, <code>gr</code>, and <code>hess</code> evaluation counts.</p></li>
+<li><p><code>message</code>: Convergence reason.</p></li>
+<li><p><code>trace</code>: Per-iteration trace data (depth controlled by
+<code>control$trace</code>); <code>NULL</code> when <code>trace = 0</code>.</p></li>
+<li><p><code>diagnostics</code>: Sublist of internal mode-dispatch diagnostics –
+<code>solver_mode_final</code>, <code>ridge_switches</code>, <code>radius_final</code>,
+<code>qn_polish_switches</code>, <code>qn_polish_reverts</code>, and
+<code>hess_evals_at_polish_switch</code>. See <code>\link{arcopt_advanced_controls}</code>
+for the meaning of each field. Most users do not need to inspect
+this; it is preserved for diagnostic and benchmarking use.</p></li>
 </ul></div>
     <div class="section level2">
     <h2 id="details">Details<a class="anchor" aria-label="anchor" href="#details"></a></h2>
     <p>The ARC algorithm iteratively minimizes a cubic regularization model:
-$$m_k(s) = f_k + g_k^T s + \frac{1}{2} s^T H_k s + \frac{\sigma_k}{3} \|s\|^3$$</p>
-<p>where \(\sigma_k\) is adaptively adjusted based on model accuracy.</p><div class="section">
+$$m_k(s) = f_k + g_k^\top s + \frac{1}{2} s^\top H_k s +
+  \frac{\sigma_k}{3} \|s\|^3$$
+where \(\sigma_k\) is adapted from observed model accuracy. arcopt
+may transparently fall back to a trust-region subproblem in flat-ridge
+regimes and (optionally, opt-in) to a line-search BFGS polish in the
+quadratic attraction basin. The transitions are observable via
+<code>result$diagnostics</code>; the algorithmic details and tunable thresholds
+are documented under <code>\link{arcopt_advanced_controls}</code>.</p><div class="section">
 <h3 id="hessian-requirement">Hessian Requirement<a class="anchor" aria-label="anchor" href="#hessian-requirement"></a></h3>
 
 
-<p>ARC critically depends on accurate curvature information. The <code>hess</code> argument
-is required. For convenience, finite-difference Hessians can be computed
-automatically with <code>control$use_fd = TRUE</code>, but analytic Hessians are
-strongly recommended for best performance.</p>
+<p>arcopt is Hessian-centric: an analytic <code>hess</code> function is strongly
+recommended. If the analytic form is unavailable, set
+<code>control$use_qn = TRUE</code> to obtain Hessian-free quasi-Newton updates
+(see the advanced-controls page).</p>
 </div>
 
-<div class="section">
-<h3 id="control-parameters">Control Parameters<a class="anchor" aria-label="anchor" href="#control-parameters"></a></h3>
-
-
-<p>The <code>control</code> list accepts:</p><ul><li><p><code>maxit</code>: Maximum iterations (default: 1000)</p></li>
-<li><p><code>ftol_abs</code>: Absolute function tolerance (default: 1e-8)</p></li>
-<li><p><code>gtol_abs</code>: Absolute gradient norm tolerance (default: 1e-5)</p></li>
-<li><p><code>xtol_abs</code>: Absolute step size tolerance (default: 1e-8)</p></li>
-<li><p><code>sigma0</code>: Initial regularization parameter (default: 1.0)</p></li>
-<li><p><code>eta1</code>: Acceptance threshold for step (default: 0.1)</p></li>
-<li><p><code>eta2</code>: Very successful step threshold (default: 0.9)</p></li>
-<li><p><code>gamma1</code>: Regularization decrease factor (default: 0.5)</p></li>
-<li><p><code>gamma2</code>: Regularization increase factor (default: 2.0)</p></li>
-<li><p><code>cubic_solver</code>: Solver selection: "auto" (recommended) or "eigen"
-(default: "auto"). Auto-selection uses eigendecomposition (Algorithm 5a) for
-robust handling of indefinite Hessians and hard cases.</p></li>
-<li><p><code>use_momentum</code>: Enable momentum acceleration (default: FALSE).
-Implements Gao et al. (2022) ARCm with recursive momentum and bisection
-search for monotonicity. <strong>Only recommended for known ill-conditioned
-problems</strong> - on well-conditioned problems, the bisection overhead may
-negate iteration savings. Empirically shows mixed results: can dramatically
-reduce iterations on some problems while increasing them on others.</p></li>
-<li><p><code>momentum_tau</code>: Maximum momentum parameter (default: 0.5, Gao's τ)</p></li>
-<li><p><code>momentum_alpha1</code>: Linear step scaling constant (default: 0.1, Gao's α₁)</p></li>
-<li><p><code>momentum_alpha2</code>: Quadratic step scaling constant (default: 1.0, Gao's α₂)</p></li>
-<li><p><code>trace</code>: Print iteration progress (default: FALSE)</p></li>
-<li><p><code>use_qn</code>: Use quasi-Newton Hessian approximation (default: FALSE).
-When TRUE, routes to arcopt_qn which uses QN updates instead of exact
-Hessians. See <code>qn_method</code> for available QN methods.</p></li>
-<li><p><code>qn_method</code>: QN update method - "sr1", "bfgs", "lbfgs", "lsr1"
-(default: "sr1"). Only used when <code>use_qn = TRUE</code>.</p></li>
-</ul></div>
-
+    </div>
+    <div class="section level2">
+    <h2 id="see-also">See also<a class="anchor" aria-label="anchor" href="#see-also"></a></h2>
+    <div class="dont-index"><p><code><a href="arcopt_advanced_controls.html">arcopt_advanced_controls</a></code> for advanced tuning of
+the cubic regularization, trust-region fallback, and quasi-Newton
+polish mode.</p></div>
     </div>
 
     <div class="section level2">

@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="index.html">arcopt</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.3.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -63,7 +63,7 @@
 <li>
 <strong>Core Solvers Layer</strong>: Newton step computation (Algorithm 1a) and eigendecomposition cubic solver (Algorithm 5a)</li>
 <li>
-<strong>Adaptation Layer</strong>: Convergence checks (Algorithm 0), σ (sigma) regularization updates (Algorithms 2a/2b), and momentum (Algorithm 3)</li>
+<strong>Adaptation Layer</strong>: Convergence checks (Algorithm 0) and σ (sigma) regularization updates (Algorithms 2a/2b)</li>
 <li>
 <strong>Safeguards Layer</strong>: Indefiniteness handling (Algorithms 6a/6b), box constraint truncation (Algorithm 7), and linear equality constraint handling (Algorithm 8)</li>
 </ol><div class="section level3">
@@ -81,19 +81,33 @@
 <div class="section level2">
 <h2 id="documentation">Documentation<a class="anchor" aria-label="anchor" href="#documentation"></a></h2>
 <ul><li>
+<strong>NEWS.md</strong>: Source-of-truth changelog. Read first when picking up a new session — it lists what changed in each release.</li>
+<li>
 <strong>design/design-principles.qmd</strong>: Design philosophy, target user profile, problem characteristics, and core principles</li>
 <li>
-<strong>design/pseudocode.qmd</strong>: Complete algorithmic specifications (8 algorithm groups) with system flowchart and detailed pseudocode</li>
+<strong>design/pseudocode.qmd</strong>: Complete algorithmic specifications (8 algorithm groups) with system flowchart and detailed pseudocode. Note: Algorithm 3 (momentum) and Algorithm 4a-lhybrid (limited-memory) sections are flagged as removed; preserved for historical reference.</li>
 <li>
 <strong>design/literature-review.qmd</strong>: Academic references and theoretical foundations</li>
 <li>
 <strong>literature/consensus_reviews/</strong>: Topic-specific reviews on regularization parameters, failure modes, and comparisons with other ARC implementations</li>
 </ul></div>
 <div class="section level2">
+<h2 id="v020-user-surface-post-simplification">v0.2.0 user surface (post-simplification)<a class="anchor" aria-label="anchor" href="#v020-user-surface-post-simplification"></a></h2>
+<p>The user-facing control surface was tiered in v0.2.0. When advising users:</p>
+<ul><li>
+<strong><code><a href="reference/arcopt.html">?arcopt</a></code></strong> documents only seven Tier 1 controls: <code>maxit</code>, <code>gtol_abs</code>, <code>ftol_abs</code>, <code>xtol_abs</code>, <code>trace</code>, <code>verbose</code>, <code>use_qn</code>. The first four are tolerances; <code>trace</code> (0/1/2/3) controls saved per-iteration data depth; <code>verbose</code> (TRUE/FALSE) prints one line per iteration to the console (orthogonal to <code>trace</code>); <code>use_qn = TRUE</code> routes to the (non-exported) quasi-Newton variant.</li>
+<li>
+<strong><code><a href="reference/arcopt_advanced_controls.html">?arcopt_advanced_controls</a></code></strong> documents everything else — cubic regularization tuning (<code>sigma0</code>, <code>eta1/2</code>, <code>gamma1/2</code>, …), the trust-region fallback (<code>tr_fallback_*</code>, <code>tr_*</code>), the optional polish mode (<code>qn_polish_*</code>, default off), and the QN routing parameters (<code>qn_method</code>, <code>qn_route_*</code>).</li>
+<li>
+<strong><code>result$diagnostics</code></strong> is a sublist holding mode-dispatch diagnostics: <code>solver_mode_final</code>, <code>ridge_switches</code>, <code>radius_final</code>, <code>qn_polish_switches</code>, <code>qn_polish_reverts</code>, <code>hess_evals_at_polish_switch</code>. QN runs additionally include <code>qn_updates</code>, <code>qn_skips</code>, <code>qn_restarts</code>, <code>qn_fd_refreshes</code>. Most users do not need to inspect these.</li>
+<li>
+<strong><code><a href="reference/arcopt_qn.html">arcopt_qn()</a></code> is internal</strong> (not in NAMESPACE). Users go through <code>arcopt(use_qn = TRUE)</code>. The internal function still has its own <code><a href="reference/arcopt_qn.html">?arcopt_qn</a></code> help page for power users.</li>
+</ul></div>
+<div class="section level2">
 <h2 id="development-guidelines">Development Guidelines<a class="anchor" aria-label="anchor" href="#development-guidelines"></a></h2>
 <div class="section level3">
 <h3 id="project-stage">Project Stage<a class="anchor" aria-label="anchor" href="#project-stage"></a></h3>
-<p>This is a research project in early development stages. The repository currently contains: - Documentation and design specifications (no implementation yet) - Git history not yet initialized on main branch - Focus on algorithm specification before coding</p>
+<p>Current state (v0.2.0.9000): tri-modal solver shipped (cubic / TR-fallback / qn_polish-opt-in), 594 unit tests passing, <code>devtools::check()</code> clean modulo four pre-existing notes about non-package directories (<code>benchmarks/</code>, <code>manuscript/</code>, <code>hexsticker/</code>). JSS manuscript at <code>manuscript/arcopt-jss.qmd</code> (gitignored, local-only); rendered PDF ~282 KB / 57 pages. CRAN submission not yet attempted.</p>
 </div>
 <div class="section level3">
 <h3 id="when-implementing-features">When Implementing Features<a class="anchor" aria-label="anchor" href="#when-implementing-features"></a></h3>
@@ -109,16 +123,22 @@
 <strong>Reference design principles</strong> when making architectural decisions—existing decisions are well-justified</li>
 </ol></div>
 <div class="section level3">
-<h3 id="future-development-priorities">Future Development Priorities<a class="anchor" aria-label="anchor" href="#future-development-priorities"></a></h3>
-<p>Based on literature review and design documents: - Core cubic regularization solver (Algorithm 5a) with eigendecomposition ✓ - Adaptive regularization updates (Algorithms 2a/2b) for σ adjustment ✓ - Indefiniteness handling for negative curvature ✓ - Constraint handling (Algorithms 7-8) for box and linear equality constraints ✓ - Momentum acceleration (Algorithm 3) as ARCm variant ✓</p>
-</div>
+<h3 id="implemented">Implemented<a class="anchor" aria-label="anchor" href="#implemented"></a></h3>
+<ul><li>Core cubic regularization solver (Algorithm 5a) with eigendecomposition</li>
+<li>Adaptive regularization updates (Algorithms 2a/2b) for σ adjustment</li>
+<li>Indefiniteness handling for negative curvature</li>
+<li>Box-constraint handling (Algorithm 7) via step truncation</li>
+<li>Quasi-Newton variants (Algorithm 4): SR1, BFGS, hybrid (BFGS → SR1 → Powell-damped) with FD-Hessian seeding of B₀</li>
+<li>Trust-region fallback (cubic → TR on flat-ridge stagnation, default on)</li>
+<li>QN-polish mode (cubic ↔︎ Wolfe line-search BFGS in healthy basin, opt-in)</li>
+</ul></div>
 <div class="section level3">
 <h3 id="deferred-features">Deferred Features<a class="anchor" aria-label="anchor" href="#deferred-features"></a></h3>
-<p>To maintain focus on core use case (statisticians, 2-500 parameters, analytic Hessians):</p>
-<p><strong>Removed in favor of eigendecomposition:</strong> - LDL-based cubic solver (see design/historical/ldl-solver.qmd)</p>
-<p><strong>Now implemented (Algorithm 4 variants):</strong> - SR1, BFGS, L-SR1, L-BFGS quasi-Newton updates - Hybrid routing (BFGS → SR1 → Powell damping) for robustness - L-Hybrid for limited-memory with same routing logic</p>
-<p><strong>Deferred to future releases:</strong> - ARCqK multi-shift CG-Lanczos solver (Algorithm 5b) for n &gt; 500 - Matrix-free optimization via hess_vec interface</p>
-<p>See design/scalable-arcs.qmd for preserved implementations and design rationale.</p>
+<p>To maintain focus on the core use case (statisticians, 2–500 parameters, analytic Hessians):</p>
+<p><strong>Removed in v0.2.0 (2026-04-24):</strong> - Momentum acceleration (<code>use_momentum</code>, <code>momentum_tau</code>, <code>momentum_alpha1</code>, <code>momentum_alpha2</code> controls + the Gao et al. 2022 ARCm bisection block); see Algorithm 3 in <code>design/pseudocode.qmd</code> (banner-marked). - <code>cubic_solver</code> user-facing knob (the internal dispatcher always selects the eigendecomposition solver; preserved as an extensibility hook for the deferred Algorithm 5b).</p>
+<p><strong>Removed before v0.2.0:</strong> - L-BFGS / L-SR1 / L-Hybrid quasi-Newton variants (commit <code>d32abde</code>, 2026-04-20). Preserved on the <code>scalable-arc</code> branch pending Algorithm 5b. - LDL-based cubic solver (see <code>design/historical/ldl-solver.qmd</code>); replaced by eigendecomposition. - Linear equality constraint handling (Algorithm 8) — design retained, implementation deferred.</p>
+<p><strong>Deferred to future releases:</strong> - ARCqK multi-shift CG-Lanczos solver (Algorithm 5b) for n &gt; 500 - Matrix-free optimization via <code>hess_vec</code> interface - <code>tr → qn_polish</code> transition (v3 feature; today TR is a terminal mode) - <code>qn_polish_enabled = TRUE</code> as default (currently opt-in pending broader benchmark evidence)</p>
+<p>See <code>design/scalable-arcs.qmd</code> for preserved L-* implementations and design rationale.</p>
 </div>
 </div>
 <div class="section level2">

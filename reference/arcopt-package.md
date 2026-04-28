@@ -12,10 +12,8 @@ Useful links:
 
 - <https://github.com/marcus-waldman/arcopt>
 
-- <https://marcus-waldman.github.io/arcopt/>
-
 - Report bugs at <https://github.com/marcus-waldman/arcopt/issues>
 
 ## Author
 
-**Maintainer**: Marcus Waldman <your.email@domain.com>
+**Maintainer**: Marcus Waldman <marcus.waldman@cuanschutz.edu>

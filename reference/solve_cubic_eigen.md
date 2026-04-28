@@ -66,6 +66,13 @@ List with:
 
   "easy", "hard", or "zero_gradient"
 
+- eigenvalues:
+
+  Eigenvalues of `H` sorted increasing, or `NULL` for the zero-gradient
+  early-return path. Exposed so callers can reuse the spectrum (e.g. for
+  `lambda_min` in end-of-iteration detectors) instead of re-decomposing
+  `H`.
+
 ## Details
 
 Uses eigen() for O(n^3) eigendecomposition. Hard case occurs when

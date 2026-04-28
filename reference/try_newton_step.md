@@ -48,4 +48,5 @@ The algorithm:
 
 No pre-filtering based on sigma is required - the ratio test in the main
 ARC loop naturally determines whether Newton steps are appropriate. See
-literature/consensus_reviews/No explicit σ-threshold for Newton Step.txt
+the design notes in `literature/consensus_reviews/` for the rationale
+behind not imposing an explicit sigma threshold on the Newton step.

@@ -22,7 +22,7 @@
 
     <a class="navbar-brand me-2" href="index.html">arcopt</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.3.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -219,27 +219,54 @@
 </div>
 </div>
 <div class="section level2">
+<h2 id="adaptive-solver-mode-dispatch">Adaptive Solver-Mode Dispatch<a class="anchor" aria-label="anchor" href="#adaptive-solver-mode-dispatch"></a>
+</h2>
+<p><code><a href="reference/arcopt.html">arcopt()</a></code> automatically adapts its subproblem solver to the local landscape:</p>
+<ol style="list-style-type: decimal">
+<li>
+<strong>Cubic</strong> (default). Uses adaptive cubic regularization with a Newton-first fast path. Handles saddles and indefinite Hessians naturally.</li>
+<li>
+<strong>Trust-region</strong> (enabled by default). Fires a one-way switch from cubic when four runtime signals indicate flat-ridge or stuck-indefinite-saddle stagnation. Replaces the cubic penalty with a hard step-norm constraint so the step can walk off a near-singular ridge.</li>
+<li>
+<strong>QN-polish</strong> (opt-in). Fires a bidirectional switch from cubic when the iterate enters the quadratic attraction basin of a strict minimum. Replaces the cubic subproblem with Wolfe line-search BFGS warmstarted from the current exact Hessian; skips further <code>hess()</code> calls until convergence or revert, saving wall-clock time on expensive Hessians (Stan AD, finite differences).</li>
+</ol>
+<div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, <span class="va">hess</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span></span>
+<span>  tr_fallback_enabled <span class="op">=</span> <span class="cn">TRUE</span>,    <span class="co"># cubic-&gt;TR on flat-ridge (default)</span></span>
+<span>  qn_polish_enabled <span class="op">=</span> <span class="cn">TRUE</span>       <span class="co"># cubic&lt;-&gt;BFGS polish in basin (opt-in)</span></span>
+<span><span class="op">)</span><span class="op">)</span></span>
+<span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">diagnostics</span><span class="op">$</span><span class="va">solver_mode_final</span>   <span class="co"># "cubic", "tr", or "qn_polish"</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">diagnostics</span><span class="op">$</span><span class="va">ridge_switches</span>      <span class="co"># count of cubic-&gt;TR transitions</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">diagnostics</span><span class="op">$</span><span class="va">qn_polish_switches</span>  <span class="co"># count of cubic-&gt;polish transitions</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">diagnostics</span><span class="op">$</span><span class="va">qn_polish_reverts</span>   <span class="co"># count of polish-&gt;cubic reversions</span></span></code></pre></div>
+<p>See <code>design/design-principles.qmd</code> §3a for the σ↔︎r duality framing and <code>todo/tr-fallback-hybrid-briefing.md</code> / <code>todo/qn-polish-mode-briefing.md</code> for the detector designs.</p>
+</div>
+<div class="section level2">
 <h2 id="common-options">Common Options<a class="anchor" aria-label="anchor" href="#common-options"></a>
 </h2>
-<div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, <span class="va">hess</span>,</span>
 <span>  control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span></span>
-<span>    <span class="co"># Quasi-Newton mode (no Hessian needed)</span></span>
+<span>    <span class="co"># Quasi-Newton mode (no exact Hessian needed)</span></span>
 <span>    use_qn <span class="op">=</span> <span class="cn">TRUE</span>,</span>
 <span>    qn_method <span class="op">=</span> <span class="st">"hybrid"</span>,    <span class="co"># recommended for saddle-prone problems;</span></span>
-<span>                             <span class="co"># also "bfgs", "sr1", "lbfgs", "lsr1", "lhybrid"</span></span>
+<span>                             <span class="co"># also "bfgs", "sr1"</span></span>
 <span></span>
 <span>    <span class="co"># Convergence tolerances</span></span>
 <span>    gtol_abs <span class="op">=</span> <span class="fl">1e-5</span>,         <span class="co"># Gradient norm</span></span>
 <span>    maxit <span class="op">=</span> <span class="fl">1000</span>,            <span class="co"># Max iterations</span></span>
 <span></span>
-<span>    <span class="co"># Momentum (enabled by default, helps ill-conditioned problems)</span></span>
-<span>    use_momentum <span class="op">=</span> <span class="cn">TRUE</span>,</span>
+<span>    <span class="co"># Hybrid solver-mode dispatch</span></span>
+<span>    tr_fallback_enabled <span class="op">=</span> <span class="cn">TRUE</span>,   <span class="co"># cubic-&gt;TR on stagnation</span></span>
+<span>    qn_polish_enabled   <span class="op">=</span> <span class="cn">FALSE</span>,  <span class="co"># cubic&lt;-&gt;polish in quadratic basin</span></span>
 <span></span>
-<span>    <span class="co"># Diagnostics</span></span>
-<span>    trace <span class="op">=</span> <span class="fl">1</span>                <span class="co"># Print progress</span></span>
+<span>    <span class="co"># Output</span></span>
+<span>    trace   <span class="op">=</span> <span class="fl">1</span>,             <span class="co"># Depth of saved trace data (0/1/2/3)</span></span>
+<span>    verbose <span class="op">=</span> <span class="cn">FALSE</span>          <span class="co"># Print one line per iteration to console</span></span>
 <span>  <span class="op">)</span></span>
 <span><span class="op">)</span></span></code></pre></div>
+<p>The full set of advanced controls (cubic regularization tuning, TR-fallback thresholds, polish-mode thresholds, QN routing) lives under <code><a href="reference/arcopt_advanced_controls.html">?arcopt_advanced_controls</a></code>.</p>
 </div>
 <div class="section level2">
 <h2 id="comparison-with-optim">Comparison with optim()<a class="anchor" aria-label="anchor" href="#comparison-with-optim"></a>
@@ -312,17 +339,27 @@
 <div class="section level2">
 <h2 id="return-value">Return Value<a class="anchor" aria-label="anchor" href="#return-value"></a>
 </h2>
-<div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb10"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/arcopt.html">arcopt</a></span><span class="op">(</span><span class="va">x0</span>, <span class="va">fn</span>, <span class="va">gr</span>, <span class="va">hess</span><span class="op">)</span></span>
 <span></span>
-<span><span class="va">result</span><span class="op">$</span><span class="va">par</span>          <span class="co"># Optimal parameters</span></span>
-<span><span class="va">result</span><span class="op">$</span><span class="va">value</span>        <span class="co"># Optimal function value</span></span>
-<span><span class="va">result</span><span class="op">$</span><span class="va">gradient</span>     <span class="co"># Gradient at solution</span></span>
-<span><span class="va">result</span><span class="op">$</span><span class="va">hessian</span>      <span class="co"># Hessian at solution (if provided)</span></span>
-<span><span class="va">result</span><span class="op">$</span><span class="va">converged</span>    <span class="co"># TRUE if converged</span></span>
-<span><span class="va">result</span><span class="op">$</span><span class="va">iterations</span>   <span class="co"># Number of iterations</span></span>
-<span><span class="va">result</span><span class="op">$</span><span class="va">evaluations</span>  <span class="co"># List: fn, gr, hess counts</span></span>
-<span><span class="va">result</span><span class="op">$</span><span class="va">message</span>      <span class="co"># Why it stopped</span></span></code></pre></div>
+<span><span class="va">result</span><span class="op">$</span><span class="va">par</span>                 <span class="co"># Optimal parameters</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">value</span>               <span class="co"># Optimal function value</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">gradient</span>            <span class="co"># Gradient at solution</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">hessian</span>             <span class="co"># Hessian at solution (exact in cubic/tr mode;</span></span>
+<span>                           <span class="co"># BFGS approximation if solver_mode_final == "qn_polish")</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">converged</span>           <span class="co"># TRUE if converged</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">iterations</span>          <span class="co"># Number of iterations</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">evaluations</span>         <span class="co"># List: fn, gr, hess counts</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">message</span>             <span class="co"># Why it stopped</span></span>
+<span></span>
+<span><span class="co"># Solver-mode diagnostics (nested sublist; most users do not inspect this).</span></span>
+<span><span class="co"># See ?arcopt_advanced_controls for the full schema.</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">diagnostics</span><span class="op">$</span><span class="va">solver_mode_final</span>           <span class="co"># "cubic", "tr", or "qn_polish"</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">diagnostics</span><span class="op">$</span><span class="va">ridge_switches</span>              <span class="co"># count of cubic-&gt;TR transitions</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">diagnostics</span><span class="op">$</span><span class="va">radius_final</span>                <span class="co"># final TR radius (NA if no switch)</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">diagnostics</span><span class="op">$</span><span class="va">qn_polish_switches</span>          <span class="co"># count of cubic-&gt;qn_polish transitions</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">diagnostics</span><span class="op">$</span><span class="va">qn_polish_reverts</span>           <span class="co"># count of qn_polish-&gt;cubic reversions</span></span>
+<span><span class="va">result</span><span class="op">$</span><span class="va">diagnostics</span><span class="op">$</span><span class="va">hess_evals_at_polish_switch</span> <span class="co"># baseline for Hessian-eval savings</span></span></code></pre></div>
 </div>
 <div class="section level2">
 <h2 id="references">References<a class="anchor" aria-label="anchor" href="#references"></a>

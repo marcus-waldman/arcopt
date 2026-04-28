@@ -9,7 +9,7 @@ eigendecomposition with explicit hard-case detection."></head><body>
 
     <a class="navbar-brand me-2" href="../index.html">arcopt</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.3.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -106,6 +106,12 @@ eigendecomposition with explicit hard-case detection.</p>
 
 <dt>case_type</dt>
 <dd><p>"easy", "hard", or "zero_gradient"</p></dd>
+
+<dt>eigenvalues</dt>
+<dd><p>Eigenvalues of <code>H</code> sorted increasing, or <code>NULL</code> for
+the zero-gradient early-return path. Exposed so callers can reuse
+the spectrum (e.g. for <code>lambda_min</code> in end-of-iteration detectors)
+instead of re-decomposing <code>H</code>.</p></dd>
 
 </dl></div>
     <div class="section level2">

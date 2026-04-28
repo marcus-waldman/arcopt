@@ -39,7 +39,8 @@ arcopt(
 - hess:
 
   Function that computes the Hessian matrix. Should take a numeric
-  vector of length Q and return a Q×Q symmetric matrix. Required.
+  vector of length Q and return a Q-by-Q symmetric matrix. Required
+  (unless `control$use_qn = TRUE`; see Details).
 
 - ...:
 
@@ -57,93 +58,113 @@ arcopt(
 
 - control:
 
-  List of control parameters (see Details).
+  A named list of control parameters. The user-facing tolerances and
+  switches are documented below; advanced regularization tuning, the
+  trust-region fallback, and the quasi-Newton polish mode live on a
+  separate help page (see `\link{arcopt_advanced_controls}`). Recognized
+  entries:
+
+  `maxit`
+
+  :   Maximum number of iterations (default `1000`).
+
+  `gtol_abs`
+
+  :   Absolute gradient-norm tolerance for convergence (default `1e-5`).
+
+  `ftol_abs`
+
+  :   Absolute objective-value tolerance (default `1e-8`).
+
+  `xtol_abs`
+
+  :   Absolute step-size tolerance (default `1e-8`).
+
+  `trace`
+
+  :   Integer in `0:3`. Depth of per-iteration data captured into
+      `result$trace`: `0` collects nothing, `1` (the default) collects
+      function value and gradient norm, `2` adds sigma, rho, step type
+      and reciprocal Hessian condition number, `3` adds the full
+      iterate, step, Hessian and convergence-criterion record. This flag
+      controls *saved* data only – for live console output see
+      `verbose`.
+
+  `verbose`
+
+  :   Logical. If `TRUE`, prints one line per iteration to the console
+      showing iteration number, objective value, `||g||_inf`, ratio rho,
+      regularization scale, and active solver mode (default `FALSE`).
+      Orthogonal to `trace`.
+
+  `use_qn`
+
+  :   Logical. If `TRUE`, route to the quasi-Newton ARC variant, which
+      approximates the Hessian via SR1/BFGS updates and does not require
+      an analytic `hess` function. See the advanced-controls page for
+      QN-specific parameters (default `FALSE`).
+
+  See `\link{arcopt_advanced_controls}` for the full set of advanced
+  tuning parameters governing the cubic regularization, the trust-region
+  fallback, and the quasi-Newton polish mode.
 
 ## Value
 
 A list with components:
 
-- `par`: Optimal parameter vector
+- `par`: Optimal parameter vector.
 
-- `value`: Optimal function value
+- `value`: Objective value at `par`.
 
-- `gradient`: Gradient at optimum
+- `gradient`: Gradient at `par`.
 
-- `hessian`: Hessian at optimum (if `hess` provided)
+- `hessian`: Hessian at `par` (or the final BFGS approximation if the
+  run ended in qn_polish mode).
 
-- `converged`: Logical, whether convergence criteria met
+- `sigma`: Final cubic regularization parameter.
 
-- `iterations`: Number of iterations performed
+- `converged`: Logical; whether convergence criteria were met.
 
-- `evaluations`: List with `fn`, `gr`, and `hess` evaluation counts
+- `iterations`: Number of iterations performed.
 
-- `message`: Convergence message
+- `evaluations`: Named list of `fn`, `gr`, and `hess` evaluation counts.
+
+- `message`: Convergence reason.
+
+- `trace`: Per-iteration trace data (depth controlled by
+  `control$trace`); `NULL` when `trace = 0`.
+
+- `diagnostics`: Sublist of internal mode-dispatch diagnostics –
+  `solver_mode_final`, `ridge_switches`, `radius_final`,
+  `qn_polish_switches`, `qn_polish_reverts`, and
+  `hess_evals_at_polish_switch`. See `\link{arcopt_advanced_controls}`
+  for the meaning of each field. Most users do not need to inspect this;
+  it is preserved for diagnostic and benchmarking use.
 
 ## Details
 
 The ARC algorithm iteratively minimizes a cubic regularization model:
-\$\$m_k(s) = f_k + g_k^T s + \frac{1}{2} s^T H_k s + \frac{\sigma_k}{3}
-\\s\\^3\$\$
-
-where \\\sigma_k\\ is adaptively adjusted based on model accuracy.
+\$\$m_k(s) = f_k + g_k^\top s + \frac{1}{2} s^\top H_k s +
+\frac{\sigma_k}{3} \\s\\^3\$\$ where \\\sigma_k\\ is adapted from
+observed model accuracy. arcopt may transparently fall back to a
+trust-region subproblem in flat-ridge regimes and (optionally, opt-in)
+to a line-search BFGS polish in the quadratic attraction basin. The
+transitions are observable via `result$diagnostics`; the algorithmic
+details and tunable thresholds are documented under
+`\link{arcopt_advanced_controls}`.
 
 ### Hessian Requirement
 
-ARC critically depends on accurate curvature information. The `hess`
-argument is required. For convenience, finite-difference Hessians can be
-computed automatically with `control$use_fd = TRUE`, but analytic
-Hessians are strongly recommended for best performance.
+arcopt is Hessian-centric: an analytic `hess` function is strongly
+recommended. If the analytic form is unavailable, set
+`control$use_qn = TRUE` to obtain Hessian-free quasi-Newton updates (see
+the advanced-controls page).
 
-### Control Parameters
+## See also
 
-The `control` list accepts:
-
-- `maxit`: Maximum iterations (default: 1000)
-
-- `ftol_abs`: Absolute function tolerance (default: 1e-8)
-
-- `gtol_abs`: Absolute gradient norm tolerance (default: 1e-5)
-
-- `xtol_abs`: Absolute step size tolerance (default: 1e-8)
-
-- `sigma0`: Initial regularization parameter (default: 1.0)
-
-- `eta1`: Acceptance threshold for step (default: 0.1)
-
-- `eta2`: Very successful step threshold (default: 0.9)
-
-- `gamma1`: Regularization decrease factor (default: 0.5)
-
-- `gamma2`: Regularization increase factor (default: 2.0)
-
-- `cubic_solver`: Solver selection: "auto" (recommended) or "eigen"
-  (default: "auto"). Auto-selection uses eigendecomposition (Algorithm
-  5a) for robust handling of indefinite Hessians and hard cases.
-
-- `use_momentum`: Enable momentum acceleration (default: FALSE).
-  Implements Gao et al. (2022) ARCm with recursive momentum and
-  bisection search for monotonicity. **Only recommended for known
-  ill-conditioned problems** - on well-conditioned problems, the
-  bisection overhead may negate iteration savings. Empirically shows
-  mixed results: can dramatically reduce iterations on some problems
-  while increasing them on others.
-
-- `momentum_tau`: Maximum momentum parameter (default: 0.5, Gao's τ)
-
-- `momentum_alpha1`: Linear step scaling constant (default: 0.1, Gao's
-  α₁)
-
-- `momentum_alpha2`: Quadratic step scaling constant (default: 1.0,
-  Gao's α₂)
-
-- `trace`: Print iteration progress (default: FALSE)
-
-- `use_qn`: Use quasi-Newton Hessian approximation (default: FALSE).
-  When TRUE, routes to arcopt_qn which uses QN updates instead of exact
-  Hessians. See `qn_method` for available QN methods.
-
-- `qn_method`: QN update method - "sr1", "bfgs", "lbfgs", "lsr1"
-  (default: "sr1"). Only used when `use_qn = TRUE`.
+[`arcopt_advanced_controls`](https://marcus-waldman.github.io/arcopt/reference/arcopt_advanced_controls.md)
+for advanced tuning of the cubic regularization, trust-region fallback,
+and quasi-Newton polish mode.
 
 ## Examples
 
